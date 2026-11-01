@@ -1,6 +1,6 @@
 [package]
 name = "post_ambient_vst"
-version = "2.2.0"
+version = "3.0.0"
 edition = "2021"
 description = "Post-punk ambient soundscape generator for FL Studio (Southwest St. Petersburg)"
 license = "GPL-3.0-only"
@@ -15,6 +15,10 @@ crate-type = ["cdylib"]
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 # GUI на egui
 nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+# Декодер аудиофайлов (WAV/MP3/FLAC/OGG/AIFF/M4A) для сэмплера
+symphonia = { version = "0.6", features = ["mp3", "aac", "isomp4", "aiff"] }
+# Нативный диалог выбора файла
+rfd = "0.17"
 
 [workspace]
 members = [".", "xtask"]

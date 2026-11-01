@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 mod dsp;
 mod editor;
+mod sample;
 use dsp::bass::BassState;
 use dsp::echo::Echo;
 use dsp::filters::StateVariableFilter;
@@ -22,6 +23,48 @@ use dsp::noise::{NoiseState, NoiseType};
 use dsp::pad::PadState;
 use dsp::reverb::Reverb;
 use nih_plug_egui::EguiState;
+use sample::{SamplerVoice, SampleShared};
+
+/// Стек зажатых нот (монофонный «последняя нота сверху», без аллокаций).
+struct NoteStack {
+    notes: [u8; 16],
+    len: usize,
+}
+
+impl NoteStack {
+    const fn new() -> Self {
+        Self {
+            notes: [0; 16],
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, note: u8) {
+        if self.len < self.notes.len() && !self.notes[..self.len].contains(&note) {
+            self.notes[self.len] = note;
+            self.len += 1;
+        }
+    }
+
+    fn remove(&mut self, note: u8) {
+        if let Some(i) = self.notes[..self.len].iter().position(|&n| n == note) {
+            self.notes.copy_within(i + 1..self.len, i);
+            self.len -= 1;
+        }
+    }
+
+    fn last(&self) -> Option<u8> {
+        if self.len > 0 {
+            Some(self.notes[self.len - 1])
+        } else {
+            None
+        }
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
+}
 
 pub struct PostAmbient {
     params: Arc<PostAmbientParams>,
@@ -40,6 +83,18 @@ pub struct PostAmbient {
     // Время для LFO «ветра» в цепочке эффектов (секунды)
     fx_time: f64,
     last_seed: i32,
+
+    // --- MIDI-гейт: звук только пока зажаты ноты ---
+    held: NoteStack,
+    current_note: u8,
+    gate_env: f32,
+    gate_target: f32,
+    /// Уровень гейта для MIDI-LED в GUI (безопасно для audio-потока).
+    gate_level: Arc<AtomicF32>,
+
+    // --- Сэмплер: свой аудиофайл через всю FX-цепочку ---
+    sampler: SamplerVoice,
+    pub sample_shared: Arc<SampleShared>,
 }
 
 #[derive(Params)]
@@ -96,6 +151,18 @@ pub struct PostAmbientParams {
     #[id = "tempo"]
     pub tempo: FloatParam,
 
+    // --- Сэмплер (свой аудиофайл) ---
+    #[id = "sample_on"]
+    pub sample_on: BoolParam,
+    #[id = "sample_loop"]
+    pub sample_loop: BoolParam,
+    #[id = "sample_lvl"]
+    pub sample_level: FloatParam,
+
+    // --- Режим гейта ---
+    #[id = "note_gate"]
+    pub note_gate: BoolParam,
+
     // --- Выход ---
     #[id = "output"]
     pub output: FloatParam,
@@ -117,6 +184,15 @@ impl Default for PostAmbient {
             reverb: Reverb::new(),
             fx_time: 0.0,
             last_seed: 42,
+
+            held: NoteStack::new(),
+            current_note: 60,
+            gate_env: 0.0,
+            gate_target: 0.0,
+            gate_level: Arc::new(AtomicF32::new(0.0)),
+
+            sampler: SamplerVoice::new(),
+            sample_shared: SampleShared::new(),
         }
     }
 }
@@ -197,6 +273,12 @@ impl Default for PostAmbientParams {
             .with_step_size(1.0)
             .with_unit(" BPM"),
 
+            sample_on: BoolParam::new("Sample Track", true),
+            sample_loop: BoolParam::new("Sample Loop", true),
+            sample_level: p01("Sample Level", 0.7),
+
+            note_gate: BoolParam::new("Gate By Notes", true),
+
             output: FloatParam::new(
                 "Output",
                 util::db_to_gain(0.0),
@@ -235,7 +317,7 @@ impl Plugin for PostAmbient {
         },
     ];
 
-    const MIDI_INPUT: MidiConfig = MidiConfig::None;
+    const MIDI_INPUT: MidiConfig = MidiConfig::Basic;
     const SAMPLE_ACCURATE_AUTOMATION: bool = true;
 
     type SysExMessage = ();
@@ -246,7 +328,11 @@ impl Plugin for PostAmbient {
     }
 
     fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
-        editor::create(self.params.clone())
+        editor::create(
+            self.params.clone(),
+            self.gate_level.clone(),
+            self.sample_shared.clone(),
+        )
     }
 
     fn initialize(
@@ -290,6 +376,10 @@ impl Plugin for PostAmbient {
         self.haas.iter_mut().for_each(|s| *s = 0.0);
         self.haas_idx = 0;
         self.fx_time = 0.0;
+        self.held.clear();
+        self.current_note = 60;
+        self.gate_env = 0.0;
+        self.gate_target = 0.0;
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -305,7 +395,51 @@ impl Plugin for PostAmbient {
         let noise_on = self.params.noise_on.value();
         let bass_on = self.params.bass_on.value();
         let pad_on = self.params.pad_on.value();
+        let sample_on = self.params.sample_on.value();
+        let sample_loop = self.params.sample_loop.value();
+        let sample_level = self.params.sample_level.value();
+        let note_gate = self.params.note_gate.value();
         let kind = self.params.noise_type.value();
+
+        // --- Подхватываем новый сэмпл (try_lock - без блокировки audio-потока) ---
+        if let Ok(guard) = self.sample_shared.loaded.try_lock() {
+            let new = guard.as_ref().map(|a| a.clone());
+            self.sampler.set_sample(new);
+        }
+
+        // --- MIDI: монофонический гейт «последняя нота сверху» ---
+        while let Some(event) = context.next_event() {
+            match event {
+                NoteEvent::NoteOn { note, .. } => {
+                    self.held.push(note);
+                    self.current_note = note;
+                    self.gate_target = 1.0;
+                    if sample_on {
+                        self.sampler.retrigger(note, sr);
+                    }
+                }
+                NoteEvent::NoteOff { note, .. } => {
+                    self.held.remove(note);
+                    match self.held.last() {
+                        // Остались другие зажатые ноты - гейт не закрывается
+                        Some(n) => self.current_note = n,
+                        None => self.gate_target = 0.0,
+                    }
+                }
+                NoteEvent::Choke { .. } => {
+                    self.held.clear();
+                    self.gate_target = 0.0;
+                }
+                _ => (),
+            }
+        }
+
+        // Коэффициенты сглаживания гейта: быстрая атака, медленный «хвост»
+        let gate_on_coef = 1.0 - (-1.0 / (0.008 * sr)).exp();
+        let gate_off_coef = 1.0 - (-1.0 / (0.12 * sr)).exp();
+
+        // Транспонирование баса и пада по зажатой ноте (нота 60 = исходный лад)
+        let note_factor = 2.0f32.powf((self.current_note as f32 - 60.0) / 12.0);
 
         // Рандомайзер: новый seed = новый паттерн шума
         let seed = self.params.seed.value();
@@ -363,7 +497,7 @@ impl Plugin for PostAmbient {
             if bass_on {
                 let b = self.bass.next_sample(
                     sr,
-                    bass_freq,
+                    bass_freq * note_factor,
                     bpm,
                     resonance,
                     distortion,
@@ -375,10 +509,29 @@ impl Plugin for PostAmbient {
             }
 
             if pad_on {
-                let (pl, pr) = self.pad.next_sample(sr, bass_freq, bpm, modulation);
+                let (pl, pr) = self.pad.next_sample(sr, bass_freq * note_factor, bpm, modulation);
                 l += pl * 1.1;
                 r += pr * 1.1;
             }
+
+            // --- Сэмплер: свой файл через всю FX-цепочку ---
+            if sample_on {
+                let (sl, sr_) = self.sampler.next_sample(sample_loop);
+                l += sl * sample_level;
+                r += sr_ * sample_level;
+            }
+
+            // --- MIDI-гейт: звук только пока зажаты ноты ---
+            // Применяется до FX - хвосты эхо/реверба свободно «дозваниваются».
+            let target = if note_gate { self.gate_target } else { 1.0 };
+            let coef = if target > self.gate_env {
+                gate_on_coef
+            } else {
+                gate_off_coef
+            };
+            self.gate_env += (target - self.gate_env) * coef;
+            l *= self.gate_env;
+            r *= self.gate_env;
 
             // --- «Бетонные стены»: резонансный фильтр с ветровой модуляцией ---
             let t = self.fx_time;
@@ -442,6 +595,10 @@ impl Plugin for PostAmbient {
                 }
             }
         }
+
+        // Уровень гейта для MIDI-LED в GUI
+        self.gate_level
+            .store(self.gate_env, std::sync::atomic::Ordering::Relaxed);
 
         ProcessStatus::Normal
     }

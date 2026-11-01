@@ -1,33 +1,39 @@
-﻿// src/editor.rs - GUI РїР»Р°РіРёРЅР° (egui, РїРѕР»РЅРѕСЃС‚СЊСЋ РєР°СЃС‚РѕРјРЅР°СЏ РѕС‚СЂРёСЃРѕРІРєР°).
+﻿// src/editor.rs - GUI плагина (egui, полностью кастомная отрисовка).
 //
-// РЎС‚РёР»СЊ: С‚С‘РјРЅС‹Р№ Р±СЂСѓС‚Р°Р»РёР·Рј / В«Р±РµС‚РѕРЅВ». РќРёРєР°РєРёС… СЃС‚Р°РЅРґР°СЂС‚РЅС‹С… РІРёРґР¶РµС‚РѕРІ egui:
-// РїРѕР»Р·СѓРЅРєРё-В«РїР»Р°РЅРєРёВ», СЃРІРµС‚РѕРґРёРѕРґРЅС‹Рµ С‚СѓРјР±Р»РµСЂС‹, РїР°РЅРµР»Рё-РїР»РёС‚С‹, С€С‚Р°РјРїС‹ СЃРµРєС†РёР№,
-// С€С‚СЂРёС…-РєРѕРґ РІ С€Р°РїРєРµ, Р·РµСЂРЅРёСЃС‚Р°СЏ С„Р°РєС‚СѓСЂР° Р±РµС‚РѕРЅР°.
-// РЁСЂРёС„С‚С‹: Oswald (СѓР·РєРёР№ РёРЅРґСѓСЃС‚СЂРёР°Р»СЊРЅС‹Р№, Р·Р°РіРѕР»РѕРІРєРё) + JetBrains Mono (РјРµС‚РєРё, С†РёС„СЂС‹).
+// Стиль: тёмный брутализм / «бетон». Никаких стандартных виджетов egui:
+// ползунки-«планки», светодиодные тумблеры, панели-плиты, штампы секций,
+// штрих-код в шапке, зернистая фактура бетона.
+// Шрифты: Oswald (узкий индустриальный, заголовки) + JetBrains Mono (метки, цифры).
 
+use crate::sample::{self, UiStatus};
 use crate::PostAmbientParams;
 use nih_plug::prelude::*;
 use nih_plug_egui::{
     create_egui_editor,
-    egui::{self, pos2, vec2, Align2, Color32, CursorIcon, FontData, FontDefinitions,
-        FontFamily, FontId, Layout, Rect, RichText, Sense, Stroke, StrokeKind, Vec2},
+    egui::{
+        self, pos2, vec2, Align2, Color32, CursorIcon, FontData, FontDefinitions, FontFamily,
+        FontId, Layout, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
+    },
     resizable_window::ResizableWindow,
 };
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// ---------------------------------------------------------------- РїР°Р»РёС‚СЂР° В«Р±РµС‚РѕРЅВ»
-const BG: Color32 = Color32::from_rgb(15, 15, 15); // С„РѕРЅ РѕРєРЅР°
-const PANEL: Color32 = Color32::from_rgb(24, 24, 25); // РїР°РЅРµР»СЊ-РїР»РёС‚Р°
-const PANEL_DARK: Color32 = Color32::from_rgb(18, 18, 19); // РІС‹РєР»СЋС‡РµРЅРЅС‹Р№ С‚СѓРјР±Р»РµСЂ
-const PANEL_HOVER: Color32 = Color32::from_rgb(33, 34, 35); // РЅР°РІРµРґРµРЅРёРµ
-const LINE: Color32 = Color32::from_rgb(52, 56, 59); // Р»РёРЅРёРё, РґРѕСЂРѕР¶РєРё
-const TEXT: Color32 = Color32::from_rgb(201, 206, 211); // РѕСЃРЅРѕРІРЅРѕР№ С‚РµРєСЃС‚
-const MUTED: Color32 = Color32::from_rgb(120, 128, 136); // РїСЂРёРіР»СѓС€С‘РЅРЅС‹Р№
-const ACCENT: Color32 = Color32::from_rgb(147, 168, 184); // С…РѕР»РѕРґРЅС‹Р№ СЃРµСЂРѕ-СЃРёРЅРёР№
-const ACCENT_DIM: Color32 = Color32::from_rgb(74, 88, 99); // РїСЂРёРіР»СѓС€С‘РЅРЅС‹Р№ Р°РєС†РµРЅС‚
+// ---------------------------------------------------------------- палитра «бетон»
+const BG: Color32 = Color32::from_rgb(15, 15, 15); // фон окна
+const PANEL: Color32 = Color32::from_rgb(24, 24, 25); // панель-плита
+const PANEL_DARK: Color32 = Color32::from_rgb(18, 18, 19); // выключенный тумблер
+const PANEL_HOVER: Color32 = Color32::from_rgb(33, 34, 35); // наведение
+const LINE: Color32 = Color32::from_rgb(52, 56, 59); // линии, дорожки
+const TEXT: Color32 = Color32::from_rgb(201, 206, 211); // основной текст
+const MUTED: Color32 = Color32::from_rgb(120, 128, 136); // приглушённый
+const ACCENT: Color32 = Color32::from_rgb(147, 168, 184); // холодный серо-синий
+const ACCENT_DIM: Color32 = Color32::from_rgb(74, 88, 99); // приглушённый акцент
+const LED_ON: Color32 = Color32::from_rgb(120, 220, 160); // MIDI-нота зажата
+const ERR: Color32 = Color32::from_rgb(196, 106, 96); // ошибка загрузки файла
 
-// ---------------------------------------------------------------- С€СЂРёС„С‚С‹
+// ---------------------------------------------------------------- шрифты
 fn disp(size: f32) -> FontId {
     FontId::new(size, FontFamily::Proportional) // Oswald
 }
@@ -38,18 +44,18 @@ fn monob(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("mono_bold".into())) // JetBrains Mono Bold
 }
 
-// РўРёРїС‹ С€СѓРјР° СЃ СЂСѓСЃСЃРєРёРјРё РёРјРµРЅР°РјРё
+// Типы шума с русскими именами
 const KINDS: [(&str, crate::dsp::noise::NoiseType); 6] = [
-    ("Р’Р•РўР•Р ", crate::dsp::noise::NoiseType::Wind),
-    ("Р РђР”РРћ", crate::dsp::noise::NoiseType::Radio),
-    ("Р”РћР–Р”Р¬", crate::dsp::noise::NoiseType::Rain),
-    ("Р“РЈР›", crate::dsp::noise::NoiseType::Hum),
-    ("РўР Р•РЎРљ", crate::dsp::noise::NoiseType::Crackle),
-    ("РЎРњР•РЎР¬", crate::dsp::noise::NoiseType::Mixed),
+    ("ВЕТЕР", crate::dsp::noise::NoiseType::Wind),
+    ("РАДИО", crate::dsp::noise::NoiseType::Radio),
+    ("ДОЖДЬ", crate::dsp::noise::NoiseType::Rain),
+    ("ГУЛ", crate::dsp::noise::NoiseType::Hum),
+    ("ТРЕСК", crate::dsp::noise::NoiseType::Crackle),
+    ("СМЕСЬ", crate::dsp::noise::NoiseType::Mixed),
 ];
 
-// ---------------------------------------------------------------- РїСЂРёРјРёС‚РёРІС‹
-/// Р—РµСЂРЅРёСЃС‚Р°СЏ С„Р°РєС‚СѓСЂР° Р±РµС‚РѕРЅР°: РґРµС‚РµСЂРјРёРЅРёСЂРѕРІР°РЅРЅС‹Рµ С‚РѕС‡РєРё СЃ РјР°Р»РѕР№ РїСЂРѕР·СЂР°С‡РЅРѕСЃС‚СЊСЋ.
+// ---------------------------------------------------------------- примитивы
+/// Зернистая фактура бетона: детерминированные точки с малой прозрачностью.
 fn concrete(painter: &egui::Painter, rect: Rect) {
     let mut s = 0x2545F491u32;
     let mut next = move || {
@@ -68,17 +74,17 @@ fn concrete(painter: &egui::Painter, rect: Rect) {
     }
 }
 
-/// РџСѓРЅРєС‚РёСЂРЅР°СЏ Р»РёРЅРёСЏ (РїСЂРѕРјС‹С€Р»РµРЅРЅС‹Р№ С‡РµСЂС‚С‘Р¶).
+/// Пунктирная линия (промышленный чертёж).
 fn dashed_line(painter: &egui::Painter, y: f32, x0: f32, x1: f32, color: Color32) {
     let mut x = x0;
     while x < x1 {
-        let w = ((x1 - x).min(4.0)).max(0.0);
+        let w = (x1 - x).min(4.0).max(0.0);
         painter.rect_filled(Rect::from_min_size(pos2(x, y), vec2(w, 1.0)), 0.0, color);
         x += 7.0;
     }
 }
 
-/// РџРѕР»РѕСЃРєР°-С€С‚СЂРёС…РєРѕРґ РІ С€Р°РїРєРµ (РґРµС‚РµСЂРјРёРЅРёСЂРѕРІР°РЅРЅС‹Р№ СѓР·РѕСЂ).
+/// Полоска-штрихкод в шапке (детерминированный узор).
 fn barcode(painter: &egui::Painter, rect: Rect) {
     let mut s = 0x9E3779B1u32;
     let mut x = rect.right() - 76.0;
@@ -96,7 +102,7 @@ fn barcode(painter: &egui::Painter, rect: Rect) {
     }
 }
 
-/// РљРЅРѕРїРєР°-В«С‡РёРїВ»: РєРІР°РґСЂР°С‚РЅР°СЏ, Р±РµР· СЃРєСЂСѓРіР»РµРЅРёР№. `active` - РёРЅРІРµСЂСЃРЅР°СЏ Р·Р°Р»РёРІРєР°.
+/// Кнопка-«чип»: квадратная, без скруглений. `active` - инверсная заливка.
 fn chip(ui: &mut egui::Ui, label: &str, active: bool, size: Vec2) -> egui::Response {
     let (resp, painter) = ui.allocate_painter(size, Sense::click());
     let rect = resp.rect;
@@ -119,12 +125,18 @@ fn chip(ui: &mut egui::Ui, label: &str, active: bool, size: Vec2) -> egui::Respo
     } else {
         MUTED
     };
-    painter.text(rect.center(), Align2::CENTER_CENTER, label, monob(9.5), tc);
+    painter.text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        label,
+        monob(9.5),
+        tc,
+    );
     resp
 }
 
-/// РџРѕР»Р·СѓРЅРѕРє-В«РїР»Р°РЅРєР°В»: РїРѕРґРїРёСЃСЊ СЃР»РµРІР°, Р·РЅР°С‡РµРЅРёРµ СЃРїСЂР°РІР°, СЂРёСЃСѓРЅРѕРє-С‚СЂРµРє СЃРЅРёР·Сѓ.
-/// РџРµСЂРµС‚Р°СЃРєРёРІР°РЅРёРµ - РїРѕ РІСЃРµР№ СЃС‚СЂРѕРєРµ, РґРІРѕР№РЅРѕР№ РєР»РёРє - СЃР±СЂРѕСЃ Рє СѓРјРѕР»С‡Р°РЅРёСЋ.
+/// Ползунок-«планка»: подпись слева, значение справа, рисунок-трек снизу.
+/// Перетаскивание - по всей строке, двойной клик - сброс к умолчанию.
 fn slider_row(ui: &mut egui::Ui, setter: &ParamSetter<'_>, param: &impl Param, label: &str) {
     let width = ui.available_width();
     let (resp, painter) = ui.allocate_painter(vec2(width, 27.0), Sense::click_and_drag());
@@ -132,7 +144,7 @@ fn slider_row(ui: &mut egui::Ui, setter: &ParamSetter<'_>, param: &impl Param, l
     let hovered = resp.hovered();
     let norm = param.modulated_normalized_value();
 
-    // РџРѕРґРїРёСЃСЊ Рё Р·РЅР°С‡РµРЅРёРµ
+    // Подпись и значение
     let label_color = if hovered { TEXT } else { MUTED };
     painter.text(
         pos2(rect.left() + 2.0, rect.top() + 5.0),
@@ -149,7 +161,7 @@ fn slider_row(ui: &mut egui::Ui, setter: &ParamSetter<'_>, param: &impl Param, l
         TEXT,
     );
 
-    // РўСЂРµРє
+    // Трек
     let track =
         Rect::from_min_size(pos2(rect.left(), rect.bottom() - 5.0), vec2(rect.width(), 3.0));
     painter.rect_filled(track, 0.0, LINE);
@@ -158,7 +170,7 @@ fn slider_row(ui: &mut egui::Ui, setter: &ParamSetter<'_>, param: &impl Param, l
         0.0,
         if hovered { ACCENT } else { ACCENT_DIM },
     );
-    // Р СѓС‡РєР°
+    // Ручка
     let handle = Rect::from_center_size(
         pos2(rect.left() + rect.width() * norm, track.center().y),
         vec2(3.0, 13.0),
@@ -183,7 +195,7 @@ fn slider_row(ui: &mut egui::Ui, setter: &ParamSetter<'_>, param: &impl Param, l
     }
 }
 
-/// РЎРІРµС‚РѕРґРёРѕРґРЅС‹Р№ С‚СѓРјР±Р»РµСЂ РґРѕСЂРѕР¶РєРё: РєРІР°РґСЂР°С‚РЅР°СЏ РїР»Р°С€РєР° + LED-РєРІР°РґСЂР°С‚.
+/// Светодиодный тумблер дорожки: квадратная плашка + LED-квадрат.
 fn toggle_row(
     ui: &mut egui::Ui,
     setter: &ParamSetter<'_>,
@@ -237,7 +249,7 @@ fn toggle_row(
     }
 }
 
-/// Р—Р°РіРѕР»РѕРІРѕРє СЃРµРєС†РёРё: С€С‚Р°РјРї-РЅРѕРјРµСЂ + РЅР°Р·РІР°РЅРёРµ + СЂР°СЃС‚СЏР¶РєР°.
+/// Заголовок секции: штамп-номер + название + растяжка.
 fn section_title(ui: &mut egui::Ui, num: &str, title: &str) {
     ui.horizontal(|ui| {
         let (stamp, painter) = ui.allocate_painter(vec2(20.0, 14.0), Sense::hover());
@@ -254,9 +266,9 @@ fn section_title(ui: &mut egui::Ui, num: &str, title: &str) {
     ui.add_space(2.0);
 }
 
-/// РџР°РЅРµР»СЊ-В«РїР»РёС‚Р°В» СЃ С„Р°РєС‚СѓСЂРѕР№ Р±РµС‚РѕРЅР°.
+/// Панель-«плита» с фактурой бетона.
 fn panel(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::none()
+    egui::Frame::NONE
         .fill(PANEL)
         .stroke(Stroke::new(1.0_f32, LINE))
         .inner_margin(egui::Margin::symmetric(10, 7))
@@ -266,26 +278,34 @@ fn panel(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
         });
 }
 
-// ---------------------------------------------------------------- РѕРєРЅРѕ
-pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> {
+// ---------------------------------------------------------------- окно
+pub(crate) fn create(
+    params: Arc<PostAmbientParams>,
+    gate_level: Arc<AtomicF32>,
+    sample_shared: Arc<sample::SampleShared>,
+) -> Option<Box<dyn Editor>> {
     let egui_state = params.editor_state.clone();
+    let gate_for_ui = gate_level.clone();
+    let sample_for_ui = sample_shared.clone();
 
     create_egui_editor(
         params.editor_state.clone(),
         (),
         |egui_ctx, _| {
-            // РЁСЂРёС„С‚С‹: Oswald + JetBrains Mono (РєРёСЂРёР»Р»РёС†Р° РµСЃС‚СЊ РІ РѕР±РѕРёС…)
+            // Шрифты: Oswald + JetBrains Mono (кириллица есть в обоих)
             let mut fonts = FontDefinitions::default();
-            fonts
-                .font_data
-                .insert("display".into(), Arc::new(FontData::from_static(include_bytes!(
+            fonts.font_data.insert(
+                "display".into(),
+                Arc::new(FontData::from_static(include_bytes!(
                     "../fonts/Display.ttf"
-                ))));
-            fonts
-                .font_data
-                .insert("mono".into(), Arc::new(FontData::from_static(include_bytes!(
+                ))),
+            );
+            fonts.font_data.insert(
+                "mono".into(),
+                Arc::new(FontData::from_static(include_bytes!(
                     "../fonts/Mono-Regular.ttf"
-                ))));
+                ))),
+            );
             fonts.font_data.insert(
                 "mono_bold".into(),
                 Arc::new(FontData::from_static(include_bytes!(
@@ -297,14 +317,16 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                 .get_mut(&FontFamily::Proportional)
                 .unwrap()
                 .insert(0, "display".into());
-            fonts.families.insert(FontFamily::Monospace, vec!["mono".into()]);
+            fonts
+                .families
+                .insert(FontFamily::Monospace, vec!["mono".into()]);
             fonts.families.insert(
                 FontFamily::Name("mono_bold".into()),
                 vec!["mono_bold".into()],
             );
             egui_ctx.set_fonts(fonts);
 
-            // РЎС‚РёР»СЊ В«Р±РµС‚РѕРЅВ»
+            // Стиль «бетон»
             let mut visuals = egui::Visuals::dark();
             visuals.panel_fill = BG;
             visuals.window_fill = BG;
@@ -326,7 +348,7 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                     ui.spacing_mut().item_spacing = vec2(6.0, 4.0);
                     ui.set_min_width(360.0);
 
-                    // ================= РЁРђРџРљРђ =================
+                    // ================= ШАПКА =================
                     let (head, painter) =
                         ui.allocate_painter(vec2(ui.available_width(), 58.0), Sense::hover());
                     let hr = head.rect;
@@ -335,14 +357,14 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                     painter.text(
                         pos2(hr.left(), hr.top() + 4.0),
                         Align2::LEFT_TOP,
-                        "РџРћРЎРў-Р­РњР‘РР•РќРў",
+                        "ПОСТ-ЭМБИЕНТ",
                         disp(25.0),
                         TEXT,
                     );
                     painter.text(
                         pos2(hr.left() + 1.0, hr.top() + 37.0),
                         Align2::LEFT_TOP,
-                        "Р®Р“Рћ-Р—РђРџРђР” РЎРџР± В· POST-PUNK В· 2000-Рµ",
+                        "ЮГО-ЗАПАД СПб · POST-PUNK · 2000-е",
                         mono(9.0),
                         MUTED,
                     );
@@ -354,6 +376,27 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                         ACCENT,
                     );
                     barcode(&painter, hr);
+
+                    // MIDI-LED: горит пока зажата нота
+                    let gate = gate_for_ui.load(Ordering::Relaxed);
+                    let midi_led = Rect::from_center_size(
+                        pos2(hr.right() - 84.0, hr.top() + 12.0),
+                        vec2(9.0, 9.0),
+                    );
+                    if gate > 0.01 {
+                        painter.rect_filled(midi_led.expand(3.5), 0.0, LED_ON.linear_multiply(0.25));
+                        painter.rect_filled(midi_led, 0.0, LED_ON);
+                    } else {
+                        painter.rect_filled(midi_led, 0.0, LINE);
+                    }
+                    painter.text(
+                        pos2(midi_led.left() - 6.0, midi_led.center().y),
+                        Align2::RIGHT_CENTER,
+                        "MIDI",
+                        monob(8.5),
+                        if gate > 0.01 { LED_ON } else { MUTED },
+                    );
+
                     painter.rect_filled(
                         Rect::from_min_size(pos2(hr.left(), hr.bottom() - 2.0), vec2(hr.width(), 2.0)),
                         0.0,
@@ -365,16 +408,16 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            // ============ 01 Р”РћР РћР–РљР ============
+                            // ============ 01 ДОРОЖКИ ============
                             panel(ui, |ui| {
-                                section_title(ui, "01", "Р”РћР РћР–РљР");
+                                section_title(ui, "01", "ДОРОЖКИ");
                                 ui.horizontal(|ui| {
-                                    let w = (ui.available_width() - 12.0) / 3.0;
+                                    let w = (ui.available_width() - 18.0) / 4.0;
                                     toggle_row(
                                         ui,
                                         setter,
                                         &params.noise_on,
-                                        "РЁРЈРњ",
+                                        "ШУМ",
                                         Color32::from_rgb(170, 180, 188),
                                         w,
                                     );
@@ -382,7 +425,7 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                                         ui,
                                         setter,
                                         &params.bass_on,
-                                        "Р‘РђРЎ",
+                                        "БАС",
                                         Color32::from_rgb(130, 158, 186),
                                         w,
                                     );
@@ -390,15 +433,44 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                                         ui,
                                         setter,
                                         &params.pad_on,
-                                        "РџРђР”",
+                                        "ПАД",
                                         Color32::from_rgb(186, 172, 148),
                                         w,
+                                    );
+                                    toggle_row(
+                                        ui,
+                                        setter,
+                                        &params.sample_on,
+                                        "СЭМПЛ",
+                                        Color32::from_rgb(176, 146, 196),
+                                        w,
+                                    );
+                                });
+                                // Режим гейта
+                                ui.horizontal(|ui| {
+                                    let on = params.note_gate.value();
+                                    if chip(
+                                        ui,
+                                        if on { "ГЕЙТ: ПО НОТАМ" } else { "ГЕЙТ: ВСЕГДА" },
+                                        on,
+                                        vec2(112.0, 18.0),
+                                    )
+                                    .clicked()
+                                    {
+                                        setter.begin_set_parameter(&params.note_gate);
+                                        setter.set_parameter(&params.note_gate, !on);
+                                        setter.end_set_parameter(&params.note_gate);
+                                    }
+                                    ui.label(
+                                        RichText::new("играет только пока зажаты ноты")
+                                            .font(mono(8.5))
+                                            .color(MUTED),
                                     );
                                 });
                             });
                             ui.add_space(5.0);
 
-                            // ============ 02 РЁРЈРњ ============
+                            // ============ 02 ШУМ ============
                             panel(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     let (stamp, painter) =
@@ -412,12 +484,12 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                                         Color32::from_rgb(16, 16, 16),
                                     );
                                     ui.label(
-                                        RichText::new("РЁРЈРњ").font(disp(13.5)).color(TEXT),
+                                        RichText::new("ШУМ").font(disp(13.5)).color(TEXT),
                                     );
                                     ui.with_layout(
                                         Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            if chip(ui, "вџі RND", false, vec2(54.0, 14.0))
+                                            if chip(ui, "⟳ RND", false, vec2(54.0, 14.0))
                                                 .clicked()
                                             {
                                                 let nanos = SystemTime::now()
@@ -434,7 +506,7 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                                 });
                                 ui.add_space(2.0);
 
-                                // РЎРµС‚РєР° С‚РёРїРѕРІ С€СѓРјР° 3x2
+                                // Сетка типов шума 3x2
                                 let current = params.noise_type.value();
                                 for row in 0..2 {
                                     ui.horizontal(|ui| {
@@ -457,13 +529,13 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                                         &mut cols[0],
                                         setter,
                                         &params.noise_level,
-                                        "РЈР РћР’Р•РќР¬",
+                                        "УРОВЕНЬ",
                                     );
                                     slider_row(
                                         &mut cols[1],
                                         setter,
                                         &params.granularity,
-                                        "Р—Р•Р РќРћ",
+                                        "ЗЕРНО",
                                     );
                                 });
                                 ui.columns(2, |cols| {
@@ -471,57 +543,57 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                                         &mut cols[0],
                                         setter,
                                         &params.modulation,
-                                        "РњРћР”РЈР›РЇР¦РРЇ",
+                                        "МОДУЛЯЦИЯ",
                                     );
-                                    slider_row(&mut cols[1], setter, &params.seed, "Р—Р•Р РќРћ Р РќР”");
+                                    slider_row(&mut cols[1], setter, &params.seed, "ЗЕРНО РНД");
                                 });
                             });
                             ui.add_space(5.0);
 
-                            // ============ 03 Р‘РђРЎ ============
+                            // ============ 03 БАС ============
                             panel(ui, |ui| {
-                                section_title(ui, "03", "Р‘РђРЎ");
+                                section_title(ui, "03", "БАС");
                                 ui.columns(2, |cols| {
-                                    slider_row(&mut cols[0], setter, &params.bass_freq, "Р§РђРЎРўРћРўРђ");
-                                    slider_row(&mut cols[1], setter, &params.bass_boost, "Р‘РЈРЎРў");
+                                    slider_row(&mut cols[0], setter, &params.bass_freq, "ЧАСТОТА");
+                                    slider_row(&mut cols[1], setter, &params.bass_boost, "БУСТ");
                                 });
                                 ui.columns(2, |cols| {
-                                    slider_row(&mut cols[0], setter, &params.glide, "РЎР›РђР™Р”");
-                                    slider_row(&mut cols[1], setter, &params.distortion, "Р”РРЎРўРћР РЁРќ");
+                                    slider_row(&mut cols[0], setter, &params.glide, "СЛАЙД");
+                                    slider_row(&mut cols[1], setter, &params.distortion, "ДИСТОРШН");
                                 });
                             });
                             ui.add_space(5.0);
 
-                            // ============ 04 РђРўРњРћРЎР¤Р•Р Рђ ============
+                            // ============ 04 АТМОСФЕРА ============
                             panel(ui, |ui| {
-                                section_title(ui, "04", "РђРўРњРћРЎР¤Р•Р Рђ");
+                                section_title(ui, "04", "АТМОСФЕРА");
                                 ui.columns(2, |cols| {
-                                    slider_row(&mut cols[0], setter, &params.filter_cutoff, "РЎР Р•Р—");
+                                    slider_row(&mut cols[0], setter, &params.filter_cutoff, "СРЕЗ");
                                     slider_row(
                                         &mut cols[1],
                                         setter,
                                         &params.resonance,
-                                        "Р Р•Р—РћРќРђРќРЎ",
+                                        "РЕЗОНАНС",
                                     );
                                 });
                                 ui.columns(2, |cols| {
-                                    slider_row(&mut cols[0], setter, &params.echo_delay, "Р­РҐРћ");
-                                    slider_row(&mut cols[1], setter, &params.reverb_size, "Р Р•Р’Р•Р Р‘");
+                                    slider_row(&mut cols[0], setter, &params.echo_delay, "ЭХО");
+                                    slider_row(&mut cols[1], setter, &params.reverb_size, "РЕВЕРБ");
                                 });
-                                slider_row(ui, setter, &params.stereo_width, "РЎРўР•Р Р•Рћ (Р”Р’РћР Р«)");
+                                slider_row(ui, setter, &params.stereo_width, "СТЕРЕО (ДВОРЫ)");
                             });
                             ui.add_space(5.0);
 
-                            // ============ 05 РўР•РњРџ ============
+                            // ============ 05 ТЕМП ============
                             panel(ui, |ui| {
-                                section_title(ui, "05", "РўР•РњРџ");
+                                section_title(ui, "05", "ТЕМП");
                                 ui.horizontal(|ui| {
                                     if chip(
                                         ui,
                                         if params.tempo_sync.value() {
-                                            "РЎРРќРљ: Р’РљР›"
+                                            "СИНК: ВКЛ"
                                         } else {
-                                            "РЎРРќРљ: Р’Р«РљР›"
+                                            "СИНК: ВЫКЛ"
                                         },
                                         params.tempo_sync.value(),
                                         vec2(86.0, 20.0),
@@ -534,33 +606,121 @@ pub(crate) fn create(params: Arc<PostAmbientParams>) -> Option<Box<dyn Editor>> 
                                         setter.end_set_parameter(&params.tempo_sync);
                                     }
                                     ui.label(
-                                        RichText::new("BPM РёР· С…РѕСЃС‚Р° (FL)")
+                                        RichText::new("BPM из хоста (FL)")
                                             .font(mono(9.0))
                                             .color(MUTED),
                                     );
                                 });
-                                slider_row(ui, setter, &params.tempo, "РўР•РњРџ (BPM)");
+                                slider_row(ui, setter, &params.tempo, "ТЕМП (BPM)");
                             });
                             ui.add_space(5.0);
 
-                            // ============ 06 Р’Р«РҐРћР” ============
+                            // ============ 06 ВЫХОД ============
                             panel(ui, |ui| {
-                                section_title(ui, "06", "Р’Р«РҐРћР”");
-                                slider_row(ui, setter, &params.output, "Р“Р РћРњРљРћРЎРўР¬");
+                                section_title(ui, "06", "ВЫХОД");
+                                slider_row(ui, setter, &params.output, "ГРОМКОСТЬ");
+                            });
+                            ui.add_space(5.0);
+
+                            // ============ 07 СЭМПЛ ============
+                            panel(ui, |ui| {
+                                section_title(ui, "07", "СЭМПЛ — СВОЙ ЗВУК");
+                                let (name, is_loading, err_msg) = {
+                                    let g = sample::lock(&sample_for_ui.loaded);
+                                    let name = g.as_ref().map(|s| s.name.clone());
+                                    let (is_loading, err) = {
+                                        let st = sample::lock(&sample_for_ui.status);
+                                        match &*st {
+                                            UiStatus::Idle => (false, None),
+                                            UiStatus::Loading => (true, None),
+                                            UiStatus::Error(e) => (false, Some(e.clone())),
+                                        }
+                                    };
+                                    (name, is_loading, err)
+                                };
+
+                                ui.horizontal(|ui| {
+                                    if chip(ui, "ОТКРЫТЬ ФАЙЛ…", false, vec2(106.0, 20.0))
+                                        .clicked()
+                                    {
+                                        if let Some(path) = rfd::FileDialog::new()
+                                            .add_filter(
+                                                "Аудио",
+                                                &["wav", "mp3", "flac", "ogg", "aiff", "aif", "m4a"],
+                                            )
+                                            .pick_file()
+                                        {
+                                            sample::spawn_load(path, sample_for_ui.clone());
+                                        }
+                                    }
+                                    let text = if is_loading {
+                                        RichText::new("ДЕКОДИРУЮ…")
+                                            .font(mono(9.0))
+                                            .color(ACCENT)
+                                    } else if let Some(n) = &name {
+                                        let shown = if n.chars().count() > 26 {
+                                            let t: String = n.chars().take(24).collect();
+                                            format!("{t}…")
+                                        } else {
+                                            n.clone()
+                                        };
+                                        RichText::new(shown).font(monob(9.5)).color(TEXT)
+                                    } else {
+                                        RichText::new("— ФАЙЛ НЕ ЗАГРУЖЕН —")
+                                            .font(mono(9.0))
+                                            .color(MUTED)
+                                    };
+                                    ui.label(text);
+                                });
+                                if let Some(e) = err_msg {
+                                    ui.label(
+                                        RichText::new(format!("ОШИБКА: {e}"))
+                                            .font(mono(8.5))
+                                            .color(ERR),
+                                    );
+                                }
+                                ui.horizontal(|ui| {
+                                    let lp = params.sample_loop.value();
+                                    if chip(
+                                        ui,
+                                        if lp { "ПЕТЛЯ: ВКЛ" } else { "ПЕТЛЯ: ВЫКЛ" },
+                                        lp,
+                                        vec2(94.0, 18.0),
+                                    )
+                                    .clicked()
+                                    {
+                                        setter.begin_set_parameter(&params.sample_loop);
+                                        setter.set_parameter(&params.sample_loop, !lp);
+                                        setter.end_set_parameter(&params.sample_loop);
+                                    }
+                                    ui.label(
+                                        RichText::new("нота = высота · через все FX")
+                                            .font(mono(8.5))
+                                            .color(MUTED),
+                                    );
+                                });
+                                slider_row(ui, setter, &params.sample_level, "УРОВЕНЬ СЭМПЛА");
                             });
 
-                            // ============ РџРћР”Р’РђР› ============
+                            // ============ ПОДВАЛ ============
                             ui.add_space(6.0);
                             let (foot, painter) = ui.allocate_painter(
-                                vec2(ui.available_width(), 18.0),
+                                vec2(ui.available_width(), 20.0),
                                 Sense::hover(),
                             );
                             let fr = foot.rect;
-                            dashed_line(&painter, fr.top(), fr.left(), fr.right() - 120.0, LINE);
+                            dashed_line(&painter, fr.top(), fr.left(), fr.right() - 200.0, LINE);
                             painter.text(
-                                pos2(fr.right(), fr.center().y),
+                                pos2(fr.left(), fr.center().y + 4.0),
+                                Align2::LEFT_CENTER,
+                                "ИГРАЙТЕ НОТАМИ — ЗВУК ТОЛЬКО ПО НАЖАТИЮ",
+                                mono(8.5),
+                                ACCENT,
+                            );
+                            painter.text(
+                                pos2(fr.right(), fr.center().y + 4.0),
                                 Align2::RIGHT_CENTER,
-                                "РЁРЈРњ В· Р‘РђРЎ В· РџРђР” вЂ” РћР”РРќ Р‘Р•РўРћРќ",
+        "ШУМ · БАС · ПАД · СЭМПЛ",
                                 mono(8.5),
                                 MUTED,
                             );
