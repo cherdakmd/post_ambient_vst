@@ -1,8 +1,9 @@
-// src/dsp/bass.js - «Холодный» пост-панк бас.
+// src/dsp/bass.js - «Холодный» пост-панк бас со слайдом нот.
 //
-// Простой секвенсор восьмыми нотами (темп BPM) играет рифф
-// в минорной пентатонике: пила + суб-октава, фильтр с огибающей
-// и лёгким драйвом - характерный «холодный» звук панельных домов.
+// Секвенсор восьмыми нотами (темп BPM) играет рифф в минорной
+// пентатонике: пила + суб-октава, фильтр с огибающей и драйвом.
+// Параметр `glide` (0..1) добавляет портаменто - ноты «плывут»
+// друг в друга, как на струне.
 
 const { StateVariableFilter } = require('./filters');
 
@@ -11,7 +12,7 @@ const TWO_PI = Math.PI * 2;
 // Стабильный пост-панк рифф (полутонов относительно корня)
 const PATTERN = [0, 0, 7, 0, 5, 3, 7, 3];
 
-function renderBass({ length, sampleRate, rootHz, bpm, resonance, drive }) {
+function renderBass({ length, sampleRate, rootHz, bpm, resonance, drive, glide = 0 }) {
   const out = new Float32Array(length);
   const filter = new StateVariableFilter(sampleRate);
 
@@ -23,17 +24,24 @@ function renderBass({ length, sampleRate, rootHz, bpm, resonance, drive }) {
   let subPhase = 0;
   let noteIndex = 0;
   let tInNote = 0;
-  let noteFreq = rootHz;
+  let curFreq = rootHz;
+  let targetFreq = rootHz;
 
   const driveGain = 1 + drive * 2.5;
+  // Коэффициент плавного «плыния» частоты к цели (экспоненциальный подход)
+  const glideTime = Math.max(0.005, glide * step * 0.9);
+  const glideCoef = glide > 0 ? 1 - Math.exp(-1 / (glideTime * sampleRate)) : 1;
 
   for (let i = 0; i < length; i++) {
     // Переход к следующей ноте
     if (tInNote >= step) {
       tInNote -= step;
       noteIndex++;
-      noteFreq = rootHz * Math.pow(2, (PATTERN[noteIndex % PATTERN.length] % 12) / 12);
+      targetFreq = rootHz * Math.pow(2, (PATTERN[noteIndex % PATTERN.length] % 12) / 12);
     }
+
+    // Слайд: частота плавно «плывёт» к новой ноте
+    curFreq += (targetFreq - curFreq) * glideCoef;
 
     // Огибающая: атак -> спад -> сустейн -> короткий релиз перед следующей нотой
     let env;
@@ -49,10 +57,10 @@ function renderBass({ length, sampleRate, rootHz, bpm, resonance, drive }) {
       env *= 1 - (tInNote - releaseStart) / (step - releaseStart);
     }
 
-    // Осцилляторы
-    phase += noteFreq / sampleRate;
+    // Осцилляторы (частота берётся из «плывущей» curFreq - отсюда и слайд саба)
+    phase += curFreq / sampleRate;
     if (phase >= 1) phase -= 1;
-    subPhase += (noteFreq * 0.5) / sampleRate; // суб-октава вниз
+    subPhase += (curFreq * 0.5) / sampleRate; // суб-октава вниз
     if (subPhase >= 1) subPhase -= 1;
 
     const saw = 2 * phase - 1;

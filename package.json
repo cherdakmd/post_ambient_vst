@@ -1,6 +1,6 @@
 {
   "name": "post_ambient_vst",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "VST plugin for FL Studio generating ambient soundscapes and atmosphere in post-punk 2000s style, based on noise and bass, inspired by panel houses and small three-story houses of Southwest St. Petersburg.",
   "main": "src/index.js",
   "scripts": {
