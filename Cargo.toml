@@ -1,6 +1,6 @@
 [package]
 name = "post_ambient_vst"
-version = "1.0.0"
+version = "2.1.0"
 edition = "2021"
 description = "Post-punk ambient soundscape generator for FL Studio (Southwest St. Petersburg)"
 license = "GPL-3.0-only"
@@ -13,6 +13,8 @@ crate-type = ["cdylib"]
 [dependencies]
 # Фича vst3 включена по умолчанию в nih-plug
 nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+# GUI на egui
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
 
 [workspace]
 members = [".", "xtask"]

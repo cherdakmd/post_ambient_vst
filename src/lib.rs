@@ -14,12 +14,14 @@ use std::f32::consts::TAU;
 use std::sync::Arc;
 
 mod dsp;
+mod editor;
 use dsp::bass::BassState;
 use dsp::echo::Echo;
 use dsp::filters::StateVariableFilter;
 use dsp::noise::{NoiseState, NoiseType};
 use dsp::pad::PadState;
 use dsp::reverb::Reverb;
+use nih_plug_egui::EguiState;
 
 pub struct PostAmbient {
     params: Arc<PostAmbientParams>,
@@ -41,7 +43,11 @@ pub struct PostAmbient {
 }
 
 #[derive(Params)]
-struct PostAmbientParams {
+pub struct PostAmbientParams {
+    /// Состояние GUI - сохраняется вместе с пресетами.
+    #[persist = "editor-state"]
+    pub editor_state: Arc<EguiState>,
+
     // --- Дорожки (стемы) ---
     #[id = "noise_on"]
     pub noise_on: BoolParam,
@@ -122,9 +128,35 @@ fn p01(name: &'static str, default: f32) -> FloatParam {
         .with_step_size(0.001)
 }
 
+/// Человекочитаемое имя типа шума (для кнопки в GUI).
+pub(crate) fn noise_type_label(kind: NoiseType) -> &'static str {
+    match kind {
+        NoiseType::Wind => "WIND",
+        NoiseType::Radio => "RADIO",
+        NoiseType::Rain => "RAIN",
+        NoiseType::Hum => "HUM",
+        NoiseType::Crackle => "CRACKLE",
+        NoiseType::Mixed => "MIXED",
+    }
+}
+
+/// Следующий тип шума (кнопка-переключатель в GUI).
+pub(crate) fn next_noise_type(kind: NoiseType) -> NoiseType {
+    match kind {
+        NoiseType::Wind => NoiseType::Radio,
+        NoiseType::Radio => NoiseType::Rain,
+        NoiseType::Rain => NoiseType::Hum,
+        NoiseType::Hum => NoiseType::Crackle,
+        NoiseType::Crackle => NoiseType::Mixed,
+        NoiseType::Mixed => NoiseType::Wind,
+    }
+}
+
 impl Default for PostAmbientParams {
     fn default() -> Self {
         Self {
+            editor_state: EguiState::from_size(440, 560),
+
             noise_on: BoolParam::new("Noise (wind/radio)", true),
             bass_on: BoolParam::new("Bass", true),
             pad_on: BoolParam::new("Pad", true),
@@ -235,6 +267,10 @@ impl Plugin for PostAmbient {
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
+    }
+
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        editor::create(self.params.clone())
     }
 
     fn initialize(
