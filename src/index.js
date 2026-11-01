@@ -4,7 +4,7 @@
 class PostAmbientVST {
   constructor() {
     this.name = "Post Ambient VST (Southwest St. Petersburg)";
-    this.version = "1.0.1";
+    this.version = "1.0.2";
     this.style = "Post-Punk 2000s / Ambient / Noise / Bass";
     this.inspiration = "Panel houses and small three-story houses of Southwest St. Petersburg";
     
@@ -14,10 +14,16 @@ class PostAmbientVST {
     this.reverbSize = 0.8; // Атмосфера (панельные дома, эхо дворов)
     this.filterCutoff = 1000; // Фильтры (бетонные стены)
     
-    // Новые функции
+    // Новые функции (v1.0.1)
     this.distortion = 0.3; // Дисторшн (пост-панк 2000-х)
     this.modulation = 0.2; // Модуляция (ветер между домами)
     this.granularity = 0.7; // Гранулярность шума (панельные дома)
+    
+    // Новые параметры (v1.0.2)
+    this.tempo = 100; // Темп (пост-панк ритм)
+    this.resonance = 0.4; // Резонанс (холодный, бетонные стены)
+    this.stereoEffect = 0.6; // Стерео-эффект (дворы)
+    this.echoDelay = 1.2; // Эхо (панельные дома, 0.5–2 сек)
     
     // Состояние
     this.isPlaying = false;
@@ -48,6 +54,26 @@ class PostAmbientVST {
     console.log(`[Modulation] Applying wind modulation... Level: ${this.modulation}`);
   }
 
+  // Новая функция: Темп (пост-панк ритм)
+  applyTempo() {
+    console.log(`[Tempo] Applying post-punk rhythm... BPM: ${this.tempo}`);
+  }
+
+  // Новая функция: Резонанс (холодный, бетонные стены)
+  applyResonance() {
+    console.log(`[Resonance] Applying cold resonance... Level: ${this.resonance}`);
+  }
+
+  // Новая функция: Стерео-эффект (дворы)
+  applyStereoEffect() {
+    console.log(`[Stereo] Applying courtyard stereo effect... Level: ${this.stereoEffect}`);
+  }
+
+  // Новая функция: Эхо (панельные дома)
+  applyEcho() {
+    console.log(`[Echo] Applying panel house echo... Delay: ${this.echoDelay}s`);
+  }
+
   // Основной цикл обработки аудио (аналог process в VST)
   process(buffer) {
     if (!this.isPlaying) return buffer;
@@ -57,8 +83,12 @@ class PostAmbientVST {
     this.applyAtmosphere();
     this.applyDistortion();
     this.applyModulation();
+    this.applyTempo();
+    this.applyResonance();
+    this.applyStereoEffect();
+    this.applyEcho();
 
-    console.log("[Process] Audio buffer processed successfully with post-punk distortion and wind modulation.");
+    console.log("[Process] Audio buffer processed successfully with all post-punk and Southwest St. Petersburg parameters.");
     return buffer;
   }
 
@@ -70,7 +100,8 @@ class PostAmbientVST {
     console.log(`Noise Level: ${this.noiseLevel} | Granularity: ${this.granularity}`);
     console.log(`Bass Frequency: ${this.bassFrequency}Hz | Distortion: ${this.distortion}`);
     console.log(`Reverb Size: ${this.reverbSize} | Filter: ${this.filterCutoff}Hz | Modulation: ${this.modulation}`);
-    console.log(`-----------------------------------------------------------`);
+    console.log(`Tempo: ${this.tempo} BPM | Resonance: ${this.resonance} | Stereo: ${this.stereoEffect} | Echo: ${this.echoDelay}s`);
+    console.log(`-----------------------------------------------------------------------------------`);
   }
 }
 
