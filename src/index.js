@@ -36,6 +36,7 @@ class PostAmbientVST {
     // 12 Нововведений и 12 Улучшений (v1.1.1)
     // Интерфейс красивее (брутализм, «бетон», «серое небо», шрифты)
     this.guiTheme = "brutalist_grey_sky";
+    this.guiConfig = "./gui/config_brutalist_grey_sky.json";
     this.presetsPath = "./presets/super_atmospheric_v1_1_1.json";
     
     // Состояние
@@ -139,6 +140,7 @@ class PostAmbientVST {
     console.log(`Style: ${this.style}`);
     console.log(`Inspiration: ${this.inspiration}`);
     console.log(`Theme: ${this.guiTheme} (Brutalist / Grey Sky / Fonts: Display, Mono-Bold, Mono-Regular)`);
+    console.log(`Config: ${this.guiConfig}`);
     console.log(`Noise Level: ${this.noiseLevel} | Granularity: ${this.granularity} | Southwest Wind: ${this.southwestWind}`);
     console.log(`Bass Frequency: ${this.bassFrequency}Hz | Distortion: ${this.distortion} | Brutalist Texture: ${this.brutalistTexture} | Tempo: ${this.tempo} BPM`);
     console.log(`Reverb Size: ${this.reverbSize} | Filter: ${this.filterCutoff}Hz | Modulation: ${this.modulation} | Spectral Shift: ${this.spectralShift}`);
