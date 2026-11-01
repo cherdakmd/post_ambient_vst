@@ -1,0 +1,13 @@
+# Зависимости (не нужно коммитить)
+node_modules/
+
+# Rust build artifacts
+/target/
+
+# Результаты рендера
+output/
+*.wav
+
+# Системные файлы
+.DS_Store
+Thumbs.db

@@ -24,30 +24,87 @@ VST-плагин для **FL Studio**, генерирующий эмбиент-�
 - **Стерео-эффект:** «дворы» (расширение звука).
 - **Эхо:** «панельные дома» (задержка, 0.5–2 сек).
 
+**Мультитрековость и новые фичи (v1.2.0+):**
+- **Дорожки (стемы):** три независимые дорожки — шум, бас, пад. Каждую можно выключить (`--tracks`) и отрендерить отдельным WAV-файлом (`--stems 1`) для своего микширования в FL Studio.
+- **Типы шума:** `wind` (ветер), `radio` (помехи), `rain` (дождь по бетону), `hum` (гул дома 50 Гц), `crackle` (скрип и треск), `mixed` (смесь Юго-Запада).
+- **Бас-буст:** подчёркивание глубокого низа (0–1).
+- **Слайд нот (glide):** портаменто баса — ноты «плывут» друг в друга.
+- **Рандомайзер (`--random`):** каждый запуск — новая случайная сцена в жанре (случайный шум, темп, эффекты, seed).
+
 **Визуализация:**
 - Темный дизайн, «брутализм», минимализм, шрифты в стиле плакатов 2000-х, визуализация «бетона» и «серого неба».
 
 ## 🛠️ Технологии
-- **Язык:** **JavaScript/Node.js** (прототип), **Rust** (цель для VST3 в FL Studio).
-- **Фреймворк:** `vst-rs` (Rust), `nih-plug` (аудио), `egui` (интерфейс).
-- **Прототип:** Запущен в Node.js, демонстрирует логику генерации звука и интерфейса.
+- **Язык:** **JavaScript/Node.js** (прототип DSP и рендера WAV), **Rust** (VST3/CLAP плагин).
+- **Фреймворк:** [`nih-plug`](https://github.com/robbert-vdh/nih-plug) (Rust, VST3 + CLAP), `egui` (интерфейс, планы).
+- **Прототип (v1.2.0):** считает **реальный звук** (DSP) и рендерит стерео WAV-файлы без сторонних зависимостей.
+- **Плагин:** собирается в `post_ambient_vst.vst3` для FL Studio.
+
+## 🧩 VST3 для FL Studio (Rust)
+
+### Сборка (один раз)
+Нужно: [Rust (rustup)](https://rustup.rs/), Visual Studio Build Tools 2022 (workload «C++ build tools»), CMake.
+
+```bash
+cargo xtask bundle post_ambient_vst --release
+```
+
+Готовый плагин: `target/bundled/post_ambient_vst.vst3`
+
+### Установка в FL Studio
+1. Скопируйте `post_ambient_vst.vst3` в `C:\Program Files\Common Files\VST3\`
+2. FL Studio → `Options → File → Plugin search list → Add plugin folder` (или Manage plugins)
+3. Нажмите `Fast scan` — плагин появится как **Post Ambient VST** (инструмент)
+4. Добавьте его в Channel rack и отправляйте на любой mixer-канал
+
+### Параметры плагина (автоматизация в FL)
+- **Дорожки:** Noise (вкл/выкл), Bass, Pad — гейты отдельных слоёв
+- **Шум:** Noise Type (Wind/Radio/Rain/Hum/Crackle/Mixed), Noise Level, Granularity, Modulation, Seed (рандомайзер)
+- **Бас:** Bass Freq, Bass Boost, Glide (слайд нот), Distortion
+- **Атмосфера:** Filter Cutoff, Resonance, Echo Delay, Reverb Size, Stereo
+- **Темп:** Sync Tempo to Host (BPM из FL) или ручной Tempo 60–160
+- **Выход:** Output (dB)
+
+Совет для стемов: поставьте 3 инстанса плагина — на одном только Noise, на втором только Bass, на третьем только Pad — и микшируйте в разных mixer-каналах FL.
 
 ## 📂 Структура проекта
 - `package.json` — конфигурация проекта.
-- `package-lock.json` — зависимости.
-- `src/index.js` — основной код плагина (генерация шума, басса, атмосферы, дисторшна, модуляции, темпа, резонанса, стерео, эха).
+- `src/index.js` — основной класс `PostAmbientVST`: параметры, дорожки (стемы), микс, цепочка эффектов, рендер в WAV.
+- `src/render.js` — CLI: рендер трека с настройкой параметров из командной строки.
+- `src/dsp/filters.js` — state-variable фильтр («бетонные стены») с плавной модуляцией.
+- `src/dsp/noise.js` — 6 типов шума: wind, radio, rain, hum, crackle, mixed.
+- `src/dsp/bass.js` — секвенсор «холодного» пост-панк баса со слайдом нот (glide).
+- `src/dsp/pad.js` — холодный эмбиент-пад (минорная прогрессия расстроенных пил).
+- `src/dsp/eq.js` — бас-буст (подчёркивание низа).
+- `src/dsp/echo.js` — ping-pong эхо «панельные дома».
+- `src/dsp/reverb.js` — Schroeder-реверберация «эхо дворов» (комб-фильтры + all-pass).
+- `src/dsp/distortion.js` — мягкий волновой дисторшн (tanh).
+- `src/dsp/stereo.js` — расширение стерео Mid/Side («дворы»).
+- `src/dsp/wav.js` — запись 16-bit PCM WAV (без зависимостей).
+- `src/dsp/rng.js` — детерминированный генератор шума (воспроизводимый рендер).
 - `README.md` — документация (эта страница).
 
 ## 🚀 Разработка (Прототип на Node.js / JavaScript)
-Поскольку Rust/vst-rs требует сборки в среде с доступом к компилятору, мы создали **прототип на Node.js / JavaScript**, который демонстрирует логику генерации звука и интерфейса.
-
-### Структура прототипа
-- `package.json` — конфигурация проекта.
-- `src/index.js` — основной код плагина (генерация шума, басса, атмосферы, дисторшна, модуляции, темпа, резонанса, стерео, эха).
+Прототип на Node.js реализует **полный DSP-пайплайн**: дорожки (шум + басс + пад) → «бетонный» фильтр → дисторшн → эхо → реверб → стерео-расширение → мастер (нормировка, фейды).
 
 ### Как запустить прототип
-1. Установите зависимости: `npm install`
-2. Запустите прототип: `npm run dev`
+1. Установите зависимости: `npm install` (зависимостей нет, но так обновится lock-файл)
+2. Отрендерите трек: `npm run dev` → `output/post_ambient.wav`
+
+### Примеры рендера
+```bash
+node src/render.js --random                          # случайная сцена в жанре
+node src/render.js --stems 1 --out output/mix.wav    # микс + отдельные дорожки (_noise, _bass, _pad)
+node src/render.js --tracks noise,bass               # только шум и бас (без пада)
+node src/render.js --noise-type rain --bass-boost 0.9 --glide 0.8
+node src/render.js --tempo 110 --echo 1.8 --duration 30 --seed 7
+```
+Доступные флаги: `--out --duration --seed --random --tracks noise,bass,pad --stems 1 --noise-type wind|radio|rain|hum|crackle|mixed --noise --bass --bass-boost --glide --reverb --filter --distortion --modulation --granularity --tempo --resonance --stereo --echo`.
+
+### Использование в FL Studio
+1. Отрендерите WAV (см. выше).
+2. Перетащите файл в плейлист FL Studio или загрузите в сэмплер (Fruity Slicer, Granulizer) для эмбиент-сцен.
+3. В будущем (Rust): `cargo build --release` → `.vst3` → `Options -> Plugins -> Manage plugins`.
 
 ### Как использовать в FL Studio (в будущем)
 1. Соберите плагин на Rust: `cargo build --release` (требуется установка Rust/vst-rs).
