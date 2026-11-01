@@ -1,0 +1,165 @@
+{
+  "pluginName": "Post Ambient VST (Southwest St. Petersburg - Super Atmospheric)",
+  "version": "1.1.1",
+  "style": "Post-Punk 2000s / Super Ambient / Brutalist",
+  "inspiration": "Panel houses and small three-story houses of Southwest St. Petersburg",
+  "superAtmosphericBase": {
+    "noiseLevel": 0.8,
+    "bassFrequency": 45,
+    "reverbSize": 0.95,
+    "filterCutoff": 800,
+    "distortion": 0.6,
+    "modulation": 0.5,
+    "granularity": 0.9,
+    "tempo": 90,
+    "resonance": 0.7,
+    "stereoEffect": 0.9,
+    "echoDelay": 2.5,
+    "spectralShift": 0.85,
+    "brutalistTexture": 0.95,
+    "southwestWind": 0.75,
+    "panelEchoDepth": 3.0
+  },
+  "innovations_12": [
+    {
+      "id": "inn_01",
+      "name": "Юго-Западный Ветровой Гейт (SW Wind Gate)",
+      "description": "Динамический гейт, реагирующий на «ветер» между панельками (southwestWind), отсекает шум при тишине."
+    },
+    {
+      "id": "inn_02",
+      "name": "Бруталистская Текстура 2.0 (Brutalist Texture Mapping)",
+      "description": "Морфинг звука в «бетон» через спектральный сдвиг (spectralShift) и дисторшн (distortion)."
+    },
+    {
+      "id": "inn_03",
+      "name": "Панельный Эхо-Резонанс (Panel Echo Resonance)",
+      "description": "Синхронизация эха (panelEchoDepth) с резонансом бетона (resonance) для «холодных» дворов."
+    },
+    {
+      "id": "inn_04",
+      "name": "Пост-Панк Ритм-Синхро (Post-Punk Sync)",
+      "description": "Автоматизация темпа (tempo 90 BPM) под «холодный бас» (bassFrequency 45Hz) с плавной модуляцией."
+    },
+    {
+      "id": "inn_05",
+      "name": "Стерео-Двор (Courtyard Stereo Expansion)",
+      "description": "Расширение стерео-эффекта (stereoEffect 0.9) с имитацией «эха панелей» в боковых каналах."
+    },
+    {
+      "id": "inn_06",
+      "name": "Гранулярный Шум-Шторм (Granular Noise Storm)",
+      "description": "Усиление гранулярности (granularity 0.9) для имитации «радиопомех» и «ветра»."
+    },
+    {
+      "id": "inn_07",
+      "name": "Фильтр Бетонных Стен (Concrete Wall Filter)",
+      "description": "Резонансный фильтр (800Hz) с «супер атмосферным» сдвигом спектра (spectralShift 0.85)."
+    },
+    {
+      "id": "inn_08",
+      "name": "Модуляция Ветровой Динамики (Wind Dynamics Modulation)",
+      "description": "Модуляция (modulation 0.5) частоты басса в зависимости от «ветра Юго-Запада»."
+    },
+    {
+      "id": "inn_09",
+      "name": "Дисторшн Пост-Панка (Post-Punk Distortion Engine)",
+      "description": "Бруталистский дисторшн (distortion 0.6) с «холодным» срезом низких частот."
+    },
+    {
+      "id": "inn_10",
+      "name": "Атмосферный Реверб-Ландшафт (Atmospheric Reverb Landscape)",
+      "description": "Реверберация (reverbSize 0.95) с «глубиной панелей» (panelEchoDepth 3.0s)."
+    },
+    {
+      "id": "inn_11",
+      "name": "Визуализация «Серое Небо» (Grey Sky GUI)",
+      "description": "Интерфейс с «бруталистским» шрифтом и «бетонными» цветами, реагирующий на параметры."
+    },
+    {
+      "id": "inn_12",
+      "name": "FL Studio Пресет-Бридж (FL Studio Preset Bridge)",
+      "description": "Прямая интеграция «супер атмосферных» пресетов в FL Studio через JSON-конфиг."
+    }
+  ],
+  "improvements_12": [
+    {
+      "id": "imp_01",
+      "name": "Улучшение GUI: «Бетонная» палитра",
+      "description": "Замена стандартных цветов на «серое небо» и «бетон» (брутализм), шрифты Юго-Запада СПб."
+    },
+    {
+      "id": "imp_02",
+      "name": "Оптимизация «Супер Атмосферного» басса",
+      "description": "Уменьшение задержки при частоте 45Hz, улучшение «холодного» звука."
+    },
+    {
+      "id": "imp_03",
+      "name": "Улучшение Эхо-Панелей",
+      "description": "Точная синхронизация panelEchoDepth (3.0s) с темпом (90 BPM) для «дворов»."
+    },
+    {
+      "id": "imp_04",
+      "name": "Улучшение Гранулярности",
+      "description": "Увеличение детализации шума (granularity 0.9) при «ветре Юго-Запада»."
+    },
+    {
+      "id": "imp_05",
+      "name": "Улучшение Стерео-Эффекта",
+      "description": "Более широкий «двор» (stereoEffect 0.9) с сохранением «холодного» центра."
+    },
+    {
+      "id": "imp_06",
+      "name": "Улучшение Резонанса",
+      "description": "Плавный «холодный» резонанс (resonance 0.7) на «бетонных» частотах."
+    },
+    {
+      "id": "imp_07",
+      "name": "Улучшение Дисторшна",
+      "description": "Бруталистская текстура (brutalistTexture 0.95) без «перегруза» FL Studio."
+    },
+    {
+      "id": "imp_08",
+      "name": "Улучшение Модуляции",
+      "description": "Динамическая модуляция (modulation 0.5) «ветра» между «панелями»."
+    },
+    {
+      "id": "imp_09",
+      "name": "Улучшение Спектрального Сдвига",
+      "description": "Точный сдвиг (spectralShift 0.85) для «серого неба» и «бетона»."
+    },
+    {
+      "id": "imp_10",
+      "name": "Улучшение Реверберации",
+      "description": "«Супер атмосферный» реверб (reverbSize 0.95) с «глубиной» (panelEchoDepth)."
+    },
+    {
+      "id": "imp_11",
+      "name": "Улучшение Интеграции с FL Studio",
+      "description": "Прямая поддержка «супер атмосферных» пресетов в интерфейсе FL Studio."
+    },
+    {
+      "id": "imp_12",
+      "name": "Улучшение Документации и Руководства",
+      "description": "Обновленный README с «супер атмосферными» параметрами и «бруталистским» дизайном."
+    }
+  ],
+  "presets_fl": [
+    {
+      "presetName": "Southwest Wind Noise (Super Atmospheric)",
+      "parameters": { "noiseLevel": 0.8, "granularity": 0.9, "southwestWind": 0.75, "modulation": 0.5 }
+    },
+    {
+      "presetName": "Cold Post-Punk Bass (Brutalist)",
+      "parameters": { "bassFrequency": 45, "distortion": 0.6, "brutalistTexture": 0.95, "tempo": 90 }
+    },
+    {
+      "presetName": "Panel House Echo (Super Ambient)",
+      "parameters": { "reverbSize": 0.95, "echoDelay": 2.5, "panelEchoDepth": 3.0, "resonance": 0.7 }
+    },
+    {
+      "presetName": "Concrete Wall Atmosphere (Spectral Shift)",
+      "parameters": { "filterCutoff": 800, "spectralShift": 0.85, "stereoEffect": 0.9 }
+    }
+  ]
+}
