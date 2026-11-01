@@ -1,7 +1,7 @@
 // src/dsp/distortion.rs - 9. Post-Punk Distortion Engine (Innovation)
 // 7. Distortion (Improvement)
 
-use super::SuperAtmosphericParams;
+use super::params::SuperAtmosphericParams;
 
 pub fn apply_super_atmospheric_distortion(params: &SuperAtmosphericParams) {
     // Логика «Дисторшна» (уровень 0.6, бруталистская текстура 0.95)

@@ -1,7 +1,7 @@
 // src/dsp/bass.rs - 2. Brutalist Texture Mapping & 4. Post-Punk Sync (Innovation)
 // 2. Bass Optimization & 7. Distortion (Improvement)
 
-use super::SuperAtmosphericParams;
+use super::params::SuperAtmosphericParams;
 
 pub fn generate_super_atmospheric_bass(params: &SuperAtmosphericParams) {
     // Логика «Басса» (45Hz, дисторшн 0.6, бруталистская текстура 0.95, темп 90 BPM)

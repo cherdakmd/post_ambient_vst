@@ -1,7 +1,7 @@
 // src/dsp/modulation.rs - 8. Wind Dynamics Modulation (Innovation)
 // 8. Modulation (Improvement)
 
-use super::SuperAtmosphericParams;
+use super::params::SuperAtmosphericParams;
 
 pub fn apply_super_atmospheric_modulation(params: &SuperAtmosphericParams) {
     // Логика «Модуляции» (уровень 0.5, ветер Юго-Запада 0.75)

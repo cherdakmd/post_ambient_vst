@@ -63,6 +63,13 @@ VST-плагин для **FL Studio**, генерирующий **супер а�
 - `package.json` — конфигурация проекта.
 - `package-lock.json` — зависимости.
 - `src/index.js` — основной код плагина (супер атмосферная логика v1.1.1).
+- `Cargo.toml` — конфигурация Rust-версии плагина (nih-plug + egui, VST3).
+- `src/lib.rs` — точка входа плагина (модули `dsp` и `editor`).
+- `src/editor.rs` — 11. Grey Sky GUI (брутализм, «серое небо», «бетон», шрифты).
+- `src/dsp/` — DSP-ядро: `params.rs` (параметры), `noise.rs`, `bass.rs`, `filter.rs`,
+  `distortion.rs`, `modulation.rs`, `tempo.rs`, `resonance.rs`, `stereo.rs`, `echo.rs`, `reverb.rs`.
+- `tools/dsp_standalone/` — автономная проверка DSP-ядра на Rust без внешних зависимостей.
+- `scripts/install_rust_offline.sh` — установка `rustc`/`cargo` без доступа к `static.rust-lang.org`.
 - `presets/super_atmospheric_v1_1_1.json` — «супер атмосферные» пресеты для FL Studio.
 - `README.md` — документация (эта страница).
 - `fonts/` — «бруталистские» шрифты (вдохновение/GUI).
@@ -81,10 +88,51 @@ VST-плагин для **FL Studio**, генерирующий **супер а�
 
 ### Как использовать в FL Studio (в будущем)
 1. **Ручное слияние PR #3 (через opencode/ручную работу):** синхронизация «супер атмосферной» логики в Rust (`src/dsp/*.rs`) в `main` (коммит `e383419` vs `9b25f82`).
-2. Соберите плагин на Rust: `cargo build --release` (требуется установка Rust/vst-rs).
+2. Соберите плагин на Rust: `cargo build --release` (Rust 1.88.0 уже установлен — см. раздел
+   «🦀 Разработка на Rust»; для полной сборки нужен доступ к `crates.io`).
 3. Найдите скомпилированный `.dll` (Windows) или `.vst3` (macOS/Linux) в `target/release`.
 4. Добавьте плагин в FL Studio (`Options -> Plugins -> Manage plugins`).
 5. Используйте «супер атмосферные» пресеты из `presets/super_atmospheric_v1_1_1.json`.
+
+## 🦀 Разработка на Rust
+
+### Тулчейн уже установлен
+```
+$ rustc --version
+rustc 1.88.0 (6b00bc388 2025-06-23)
+$ cargo --version
+cargo 1.88.0 (873a06493 2025-05-10)
+```
+Компилятор установлен в `/opt/rust` (симлинки `rustc`, `cargo`, `rustdoc` в `/usr/local/bin`).
+
+### Установка заново (в т.ч. без доступа к `static.rust-lang.org`)
+```bash
+./scripts/install_rust_offline.sh            # ставит rustc/cargo/rust-std в /opt/rust
+RUST_PREFIX=$HOME/rust ./scripts/install_rust_offline.sh
+```
+Скрипт скачивает компоненты тулчейна из npm-реестра (пакеты `@rustbin/rustc-*`,
+`@rustbin/cargo-*`, `@rustbin/rust-std-*`) и ставит их штатным `install.sh`.
+Обычный путь (`curl https://sh.rustup.rs | sh`) тоже работает, если сеть открыта.
+
+### Проверка DSP-ядра без внешних зависимостей
+DSP-ядро не зависит от `nih-plug`/`egui`, поэтому оно собирается даже когда
+`crates.io` недоступен:
+```bash
+cd tools/dsp_standalone
+cargo test            # 5 тестов: параметры, 90 BPM, эхо 120000/144000 сэмплов, фильтр
+cargo run --release   # полная цепочка: 12 инноваций + 12 улучшений
+```
+Пример вывода: `Cutoff: 800Hz -> 1480Hz (shift 0.85)`, `Beat: 0.666667 s`,
+`Echo delay: 120000 samples`, `Panel echo depth: 144000 samples`.
+
+### Полная сборка плагина (VST3 для FL Studio)
+```bash
+cargo build --release
+```
+Для этой команды нужен доступ к `crates.io` — зависимость `nih-plug` + `egui`
+тянет ~200 крейтов. В закрытой песочнице сборка падает на
+`failed to download from https://index.crates.io/config.json` — на машине с
+открытым интернетом всё собирается без изменений (`target/release/post_ambient_vst.vst3`).
 
 ## 🌐 Публикация на GitHub
 - **Репозиторий:** [https://github.com/cherdakmd/post_ambient_vst](https://github.com/cherdakmd/post_ambient_vst)

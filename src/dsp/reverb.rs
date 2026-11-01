@@ -1,7 +1,7 @@
 // src/dsp/reverb.rs - 3. Panel Echo Resonance & 10. Atmospheric Reverb Landscape (Innovation)
 // 3. Panel Echo & 10. Reverb (Improvement)
 
-use super::SuperAtmosphericParams;
+use super::params::SuperAtmosphericParams;
 
 pub fn apply_super_atmospheric_reverb(params: &SuperAtmosphericParams) {
     // Логика «Атмосферы» (реверб 0.95, фильтр 800Hz, модуляция 0.5, сдвиг 0.85, эхо 2.5с, глубина панелей 3.0с, резонанс 0.7, стерео 0.9)

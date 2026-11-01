@@ -1,7 +1,7 @@
 // src/dsp/stereo.rs - 5. Courtyard Stereo Expansion (Innovation)
 // 5. Stereo Effect (Improvement)
 
-use super::SuperAtmosphericParams;
+use super::params::SuperAtmosphericParams;
 
 pub fn apply_super_atmospheric_stereo(params: &SuperAtmosphericParams) {
     // Логика «Стерео» (уровень 0.9)

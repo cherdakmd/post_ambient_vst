@@ -1,7 +1,7 @@
 // src/dsp/echo.rs - 3. Panel Echo Resonance (Innovation)
 // 3. Panel Echo & 10. Reverb (Improvement)
 
-use super::SuperAtmosphericParams;
+use super::params::SuperAtmosphericParams;
 
 pub fn apply_super_atmospheric_echo(params: &SuperAtmosphericParams) {
     // Логика «Эхо» (задержка 2.5с, глубина панелей 3.0с)

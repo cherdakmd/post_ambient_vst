@@ -1,7 +1,7 @@
 // src/dsp/noise.rs - 1. SW Wind Gate & 6. Granular Noise Storm (Innovation)
 // 4. Granularity & 8. Wind Dynamics Modulation (Improvement)
 
-use super::SuperAtmosphericParams;
+use super::params::SuperAtmosphericParams;
 
 pub fn generate_super_atmospheric_noise(params: &SuperAtmosphericParams) {
     // Логика «Шума» (уровень 0.8, гранулярность 0.9, ветер Юго-Запада 0.75)

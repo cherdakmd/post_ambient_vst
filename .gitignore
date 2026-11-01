@@ -1,0 +1,13 @@
+# Rust
+/target/
+**/target/
+Cargo.lock
+
+# Node.js
+node_modules/
+
+# Сборки плагинов
+*.dll
+*.so
+*.dylib
+*.vst3/

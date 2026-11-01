@@ -1,7 +1,7 @@
 // src/dsp/tempo.rs - 4. Post-Punk Sync (Innovation)
 // 3. Panel Echo (Improvement)
 
-use super::SuperAtmosphericParams;
+use super::params::SuperAtmosphericParams;
 
 pub fn apply_super_atmospheric_tempo(params: &SuperAtmosphericParams) {
     // Логика «Темпа» (90 BPM)

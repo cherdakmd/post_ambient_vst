@@ -23,50 +23,12 @@ use std::sync::{Arc, Mutex};
 // 6. Resonance | 7. Distortion | 8. Modulation | 9. Spectral Shift | 10. Reverb
 // 11. FL Studio Integration | 12. Documentation
 
-#[derive(Clone, Copy, Debug)]
-pub struct SuperAtmosphericParams {
-    // Базовые (v1.1.0)
-    pub noise_level: f32,       // 0.8
-    pub bass_frequency: f32,    // 45Hz
-    pub reverb_size: f32,       // 0.95
-    pub filter_cutoff: f32,     // 800Hz
-    // v1.0.1
-    pub distortion: f32,        // 0.6
-    pub modulation: f32,        // 0.5
-    pub granularity: f32,       // 0.9
-    // v1.0.2
-    pub tempo: f32,             // 90 BPM
-    pub resonance: f32,         // 0.7
-    pub stereo_effect: f32,     // 0.9
-    pub echo_delay: f32,        // 2.5s
-    // v1.1.0
-    pub spectral_shift: f32,    // 0.85
-    pub brutalist_texture: f32, // 0.95
-    pub southwest_wind: f32,    // 0.75
-    pub panel_echo_depth: f32,  // 3.0s
-}
+pub mod dsp;
+pub mod editor;
 
-impl Default for SuperAtmosphericParams {
-    fn default() -> Self {
-        Self {
-            noise_level: 0.8,
-            bass_frequency: 45.0,
-            reverb_size: 0.95,
-            filter_cutoff: 800.0,
-            distortion: 0.6,
-            modulation: 0.5,
-            granularity: 0.9,
-            tempo: 90.0,
-            resonance: 0.7,
-            stereo_effect: 0.9,
-            echo_delay: 2.5,
-            spectral_shift: 0.85,
-            brutalist_texture: 0.95,
-            southwest_wind: 0.75,
-            panel_echo_depth: 3.0,
-        }
-    }
-}
+// Параметры живут в DSP-ядре (src/dsp/params.rs), чтобы ядро собиралось
+// без внешних зависимостей (nih-plug / egui) — см. tools/dsp_standalone.
+pub use crate::dsp::params::SuperAtmosphericParams;
 
 pub struct PostAmbientProcessor {
     params: Arc<Mutex<SuperAtmosphericParams>>,

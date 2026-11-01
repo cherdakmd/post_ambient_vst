@@ -1,7 +1,7 @@
 // src/dsp/resonance.rs - 3. Panel Echo Resonance (Innovation)
 // 6. Resonance (Improvement)
 
-use super::SuperAtmosphericParams;
+use super::params::SuperAtmosphericParams;
 
 pub fn apply_super_atmospheric_resonance(params: &SuperAtmosphericParams) {
     // Логика «Резонанса» (уровень 0.7, глубина эха панелей 3.0с)
