@@ -35,9 +35,37 @@ VST-плагин для **FL Studio**, генерирующий эмбиент-�
 - Темный дизайн, «брутализм», минимализм, шрифты в стиле плакатов 2000-х, визуализация «бетона» и «серого неба».
 
 ## 🛠️ Технологии
-- **Язык:** **JavaScript/Node.js** (прототип), **Rust** (цель для VST3 в FL Studio).
-- **Фреймворк:** `vst-rs` (Rust), `nih-plug` (аудио), `egui` (интерфейс).
-- **Прототип (v1.1.0):** считает **реальный звук** (DSP) и рендерит стерео WAV-файлы без сторонних зависимостей.
+- **Язык:** **JavaScript/Node.js** (прототип DSP и рендера WAV), **Rust** (VST3/CLAP плагин).
+- **Фреймворк:** [`nih-plug`](https://github.com/robbert-vdh/nih-plug) (Rust, VST3 + CLAP), `egui` (интерфейс, планы).
+- **Прототип (v1.2.0):** считает **реальный звук** (DSP) и рендерит стерео WAV-файлы без сторонних зависимостей.
+- **Плагин:** собирается в `post_ambient_vst.vst3` для FL Studio.
+
+## 🧩 VST3 для FL Studio (Rust)
+
+### Сборка (один раз)
+Нужно: [Rust (rustup)](https://rustup.rs/), Visual Studio Build Tools 2022 (workload «C++ build tools»), CMake.
+
+```bash
+cargo xtask bundle post_ambient_vst --release
+```
+
+Готовый плагин: `target/bundled/post_ambient_vst.vst3`
+
+### Установка в FL Studio
+1. Скопируйте `post_ambient_vst.vst3` в `C:\Program Files\Common Files\VST3\`
+2. FL Studio → `Options → File → Plugin search list → Add plugin folder` (или Manage plugins)
+3. Нажмите `Fast scan` — плагин появится как **Post Ambient VST** (инструмент)
+4. Добавьте его в Channel rack и отправляйте на любой mixer-канал
+
+### Параметры плагина (автоматизация в FL)
+- **Дорожки:** Noise (вкл/выкл), Bass, Pad — гейты отдельных слоёв
+- **Шум:** Noise Type (Wind/Radio/Rain/Hum/Crackle/Mixed), Noise Level, Granularity, Modulation, Seed (рандомайзер)
+- **Бас:** Bass Freq, Bass Boost, Glide (слайд нот), Distortion
+- **Атмосфера:** Filter Cutoff, Resonance, Echo Delay, Reverb Size, Stereo
+- **Темп:** Sync Tempo to Host (BPM из FL) или ручной Tempo 60–160
+- **Выход:** Output (dB)
+
+Совет для стемов: поставьте 3 инстанса плагина — на одном только Noise, на втором только Bass, на третьем только Pad — и микшируйте в разных mixer-каналах FL.
 
 ## 📂 Структура проекта
 - `package.json` — конфигурация проекта.
