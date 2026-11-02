@@ -82,6 +82,17 @@ cargo xtask bundle post_ambient_vst --release
 - `src/dsp/stereo.js` — расширение стерео Mid/Side («дворы»).
 - `src/dsp/wav.js` — запись 16-bit PCM WAV (без зависимостей).
 - `src/dsp/rng.js` — детерминированный генератор шума (воспроизводимый рендер).
+- `src/dsp/super_atmospheric/` — автономное «супер атмосферное» DSP-ядро на Rust
+  (12 инноваций + 12 улучшений, без внешних крейтов).
+- `src/dsp/*.rs` (bass/echo/filters/noise/pad/reverb/rng) — DSP плагина VST3 v3.0.0.
+- `src/sample.rs` — сэмплер (WAV/MP3/FLAC/OGG) на `symphonia`.
+- `xtask/` — бандлер VST3 (`cargo xtask bundle post_ambient_vst --release`).
+- `tools/dsp_standalone/` — проверка «супер атмосферного» ядра без сети (`cargo test`, рендер WAV).
+- `tools/analyze_bands.py` — спектральный анализ рендера (низ/середина/верх).
+- `scripts/install_rust_offline.sh` — установка `rustc`/`cargo` без `static.rust-lang.org`.
+- `presets/super_atmospheric_v1_1_1.json` — пресеты для FL Studio.
+- `gui/config_brutalist_grey_sky.json` — бруталистская тема «серое небо».
+- `docs/BUILD_OFFLINE.md` — сборка онлайн и офлайн (`cargo vendor`).
 - `README.md` — документация (эта страница).
 
 ## 🚀 Разработка (Прототип на Node.js / JavaScript)
@@ -112,11 +123,57 @@ node src/render.js --tempo 110 --echo 1.8 --duration 30 --seed 7
 3. Добавьте плагин в FL Studio (`Options -> Plugins -> Manage plugins`).
 4. Используйте плагин для генерации эмбиент-звуков и атмосферы.
 
+## 🎛️ «Супер атмосферное» DSP-ядро на Rust (v1.2.0)
+
+Рядом с JS-прототипом и VST3-плагином живёт автономное DSP-ядро
+`src/dsp/super_atmospheric/` — 12 инноваций и 12 улучшений, реализованные
+по-настоящему (обработка сэмплов, а не `println!`-заглушки) и **без единого внешнего крейта**:
+
+| Модуль | Что делает |
+|---|---|
+| `noise.rs` | гранулярный шум: два зерна с перекрытием Ханна 50%, чтение из кольцевого буфера; гул + ВЧ-«воздух»; ветровой гейт с порывами 0.7–2.3 с |
+| `bass.rs` | басс 45 Гц: тон + суб-октава + «бетонная» примесь, пульс в такт 90 BPM |
+| `filter.rs` | однополюсный «бетонный» ФНЧ + резонансный SVF (Chamberlin); 800 Гц → 1480 Гц спектральным сдвигом |
+| `distortion.rs` | `tanh`-клиппинг (драйв ×8.2) + нечётная «бетонная» примесь + лимитер |
+| `modulation.rs` | LFO 0.375 Гц, синхронный темпу |
+| `tempo.rs` | задержки, синхронные доле (четверть 0.667 с, с точкой 1.0 с) |
+| `resonance.rs` | 3 моды панели (62/187/431 Гц) |
+| `stereo.rs` | M/S-расширение «дворов» |
+| `echo.rs` | линия задержки 2.5 с, окрашенная обратная связь |
+| `reverb.rs` | Schroeder/Freeverb: 4 comb + 2 allpass на канал |
+
+Цепочка: `вход → шум/басс → дисторшн → фильтр «бетонной стены» → резонансы панелей →
+LFO ветра → эхо панельного дома → реверб-ландшафт → стерео → лимитер`,
+точка входа — `SuperAtmosphericEngine::process(left, right)`.
+
+Проверяется без зависимостей и без сети:
+
+```bash
+cd tools/dsp_standalone
+cargo test             # 43 теста
+cargo run --release    # 8 с стерео → output/post_ambient_super_atmospheric.wav
+python3 ../../tools/analyze_bands.py ../../output/post_ambient_super_atmospheric.wav
+# peak 0.88 | RMS 0.26 | clipped 0 | low 0.193 | mid 0.126 | high 0.093
+```
+
+## 🦀 Установка Rust и офлайн-сборка
+
+Если `static.rust-lang.org` / `sh.rustup.rs` недоступны (закрытая сеть):
+
+```bash
+./scripts/install_rust_offline.sh     # rustc/cargo 1.88.0 из npm-пакетов @rustbin/*
+```
+
+Плагину нужен `crates.io` (`nih-plug` + `symphonia` + `rfd` — около 200 крейтов);
+рецепт офлайн-сборки через `cargo vendor` — в `docs/BUILD_OFFLINE.md`.
+«Супер атмосферное» ядро (`tools/dsp_standalone`) собирается и тестируется вообще без сети.
+
 ## 🌐 Публикация на GitHub
 - **Репозиторий:** [https://github.com/cherdakmd/post_ambient_vst](https://github.com/cherdakmd/post_ambient_vst)
 - **Ветка:** `arena/e1b75971-post-ambient-vst`
-- **Pull Request:** [https://github.com/cherdakmd/post_ambient_vst/pull/1](https://github.com/cherdakmd/post_ambient_vst/pull/1)
+- **Pull Request:** [https://github.com/cherdakmd/post_ambient_vst/pull/1](https://github.com/cherdakmd/post_ambient_vst/pull/1) (влит)
 - **Коммит:** `05b82d73ef5e40070ec2ddb2184bfab99bd35be7` (базовый), текущие изменения в ветке.
+- **Ветка разработки:** `arena/139069db-post-ambient-vst` (PR #3) — «супер атмосферное» ядро v1.2.0.
 
 ## 📜 Лицензия
 MIT (или любая другая, по выбору автора).
