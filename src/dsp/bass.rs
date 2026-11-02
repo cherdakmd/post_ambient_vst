@@ -1,119 +1,133 @@
-// src/dsp/bass.rs - 2. Brutalist Texture Mapping & 4. Post-Punk Sync (Innovation)
-// 2. Bass Optimization & 7. Distortion (Improvement)
+// «Холодный» пост-панк бас со слайдом нот (портаменто).
+//
+// Секвенсор восьмыми нотами играет рифф в минорной пентатонике:
+// пила + суб-октава, фильтр с огибающей и драйвом.
+// `glide` (0..1) заставляет ноты «плыть» друг в друга.
 
-use super::params::SuperAtmosphericParams;
+use super::filters::StateVariableFilter;
+use std::f32::consts::TAU;
 
-const TAU: f32 = std::f32::consts::TAU;
+// Стабильный пост-панк рифф (полутонов относительно корня)
+const PATTERN: [f32; 8] = [0.0, 0.0, 7.0, 0.0, 5.0, 3.0, 7.0, 3.0];
 
-/// Холодный пост-панк басс: основной тон + суб-октава + «бетонная» примесь,
-/// пульсирующий в такт темпу (4. Post-Punk Sync).
-#[derive(Clone, Debug)]
-pub struct SubBass {
+pub struct BassState {
     phase: f32,
     sub_phase: f32,
-    beat_phase: f32,
+    note_index: u32,
+    t_in_note: f32,
+    cur_freq: f32,
+    target_freq: f32,
+    filter: StateVariableFilter,
+    boost_filter: StateVariableFilter,
+    sample_rate: f32,
 }
 
-impl SubBass {
-    pub fn new() -> Self {
+impl BassState {
+    pub fn new(sample_rate: f32, root_hz: f32) -> Self {
         Self {
             phase: 0.0,
             sub_phase: 0.0,
-            beat_phase: 0.0,
+            note_index: 0,
+            t_in_note: 0.0,
+            cur_freq: root_hz,
+            target_freq: root_hz,
+            filter: StateVariableFilter::new(sample_rate),
+            boost_filter: StateVariableFilter::new(sample_rate),
+            sample_rate,
         }
     }
 
-    pub fn process(&mut self, params: &SuperAtmosphericParams, sample_rate: f32) -> f32 {
-        let sr = sample_rate.max(1.0);
-        let freq = params.bass_frequency.clamp(10.0, sr * 0.45);
-        let inc = TAU * freq / sr;
-
-        self.phase = (self.phase + inc) % TAU;
-        self.sub_phase = (self.sub_phase + inc * 0.5) % TAU;
-
-        // 4. Post-Punk Sync: доля = 60 / BPM
-        let beat = params.beat_seconds();
-        self.beat_phase = (self.beat_phase + 1.0 / (sr * beat)) % 1.0;
-
-        // 2. Bass Optimization: основной тон + суб-октава
-        let body = self.phase.sin() * 0.6 + self.sub_phase.sin() * 0.35;
-        // 2. Brutalist Texture Mapping: жёсткая примесь «бетона»
-        let grit = (self.phase * 2.0).sin() * 0.15 * params.brutalist_texture.clamp(0.0, 1.0);
-        // Пульс в такте
-        let pulse = 0.85 + 0.15 * (TAU * self.beat_phase).sin();
-
-        ((body + grit) * pulse * 0.7).clamp(-1.0, 1.0)
-    }
-
-    pub fn reset(&mut self) {
+    pub fn reset(&mut self, root_hz: f32) {
         self.phase = 0.0;
         self.sub_phase = 0.0;
-        self.beat_phase = 0.0;
+        self.note_index = 0;
+        self.t_in_note = 0.0;
+        self.cur_freq = root_hz;
+        self.target_freq = root_hz;
+        self.filter.reset();
+        self.boost_filter.reset();
     }
 
-    /// Фаза доли (0..1) — для визуализации в GUI.
-    pub fn beat_phase(&self) -> f32 {
-        self.beat_phase
-    }
-}
+    pub fn next_sample(
+        &mut self,
+        sample_rate: f32,
+        root_hz: f32,
+        bpm: f32,
+        resonance: f32,
+        drive: f32,
+        glide: f32,
+        bass_boost: f32,
+    ) -> f32 {
+        self.sample_rate = sample_rate;
+        let step = 60.0 / bpm / 2.0; // длительность восьмой ноты (с)
+        let attack = 0.004;
+        let decay = 0.09;
 
-impl Default for SubBass {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Отчёт параметров (используется плагином и автономной проверкой).
-pub fn generate_super_atmospheric_bass(params: &SuperAtmosphericParams) {
-    println!(
-        "[DSP Bass] SUPER GENERATING bass... Frequency: {}Hz, Distortion: {}, Brutalist Texture: {}, Tempo: {} BPM | [Innovation] Brutalist Texture 2.0 & Post-Punk Sync | [Improvement] Bass Optimization & Distortion Engine",
-        params.bass_frequency, params.distortion, params.brutalist_texture, params.tempo
-    );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn output_is_bounded() {
-        let p = SuperAtmosphericParams::default();
-        let mut b = SubBass::new();
-        for _ in 0..20_000 {
-            let s = b.process(&p, 48_000.0);
-            assert!(s.is_finite() && s.abs() <= 1.0);
+        // Переход к следующей ноте
+        if self.t_in_note >= step {
+            self.t_in_note -= step;
+            self.note_index = self.note_index.wrapping_add(1);
+            let semitone = PATTERN[(self.note_index as usize) % PATTERN.len()];
+            self.target_freq = root_hz * 2.0_f32.powf(semitone / 12.0);
         }
-    }
 
-    #[test]
-    fn pitch_follows_bass_frequency() {
-        // За 1 секунду на 45 Гц фаза должна сделать 45 полных оборотов.
-        let p = SuperAtmosphericParams::default();
-        let mut b = SubBass::new();
-        let mut crossings = 0;
-        let mut prev = b.process(&p, 48_000.0);
-        for _ in 1..48_000 {
-            let s = b.process(&p, 48_000.0);
-            if prev <= 0.0 && s > 0.0 {
-                crossings += 1;
-            }
-            prev = s;
-        }
-        assert!(
-            (40..=50).contains(&crossings),
-            "ожидалось ~45 пересечений нуля, получено {}",
-            crossings
-        );
-    }
+        // Слайд: частота плавно «плывёт» к новой ноте
+        let glide_time = (glide * step * 0.9).max(0.005);
+        let glide_coef = if glide > 0.0 {
+            1.0 - (-1.0 / (glide_time * sample_rate)).exp()
+        } else {
+            1.0
+        };
+        self.cur_freq += (self.target_freq - self.cur_freq) * glide_coef;
 
-    #[test]
-    fn beat_phase_stays_in_unit_range() {
-        let p = SuperAtmosphericParams::default();
-        let mut b = SubBass::new();
-        for _ in 0..100_000 {
-            b.process(&p, 48_000.0);
-            let ph = b.beat_phase();
-            assert!((0.0..1.0).contains(&ph));
+        // Огибающая: атак -> спад -> сустейн -> релиз перед следующей нотой
+        let mut env = if self.t_in_note < attack {
+            self.t_in_note / attack
+        } else if self.t_in_note < decay {
+            1.0 - 0.35 * ((self.t_in_note - attack) / (decay - attack))
+        } else {
+            0.65
+        };
+        let release_start = step * 0.85;
+        if self.t_in_note > release_start {
+            env *= 1.0 - (self.t_in_note - release_start) / (step - release_start);
         }
+
+        // Осцилляторы
+        self.phase += self.cur_freq / sample_rate;
+        if self.phase >= 1.0 {
+            self.phase -= 1.0;
+        }
+        self.sub_phase += (self.cur_freq * 0.5) / sample_rate;
+        if self.sub_phase >= 1.0 {
+            self.sub_phase -= 1.0;
+        }
+
+        let saw = 2.0 * self.phase - 1.0;
+        let sub = (TAU * self.sub_phase).sin();
+        let mut s = saw * 0.5 + sub * 0.8;
+
+        // Фильтр с огибающей и резонансом («бетонные стены»)
+        let cutoff = 90.0 + env * (450.0 + resonance * 1600.0);
+        self.filter.tick(s, cutoff, 0.25 + resonance * 0.55);
+        s = self.filter.low;
+
+        // Лёгкий драйв - «сырость» пост-панка
+        let drive_gain = 1.0 + drive * 2.5;
+        s = (s * drive_gain).tanh() / drive_gain.tanh();
+
+        s *= env * 0.55;
+        self.t_in_note += 1.0 / sample_rate;
+
+        // Бас-буст: подчёркивание низа + мягкий ограничитель
+        if bass_boost > 0.0 {
+            self.boost_filter.tick(s, 110.0, 0.1);
+            s += self.boost_filter.low * bass_boost * 1.8;
+            s = s.tanh();
+        } else {
+            self.boost_filter.reset();
+        }
+
+        s
     }
 }

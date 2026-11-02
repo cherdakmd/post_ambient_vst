@@ -1,15 +1,21 @@
-# Rust
+# Зависимости (не нужно коммитить)
+node_modules/
+
+# Rust build artifacts
 /target/
 **/target/
 
-# Node.js
-node_modules/
-
-# Рендеры (tools/dsp_standalone)
+# Результаты рендера (tools/dsp_standalone, src/render.js)
 output/
+*.wav
 
 # Сборки плагинов
 *.dll
 *.so
 *.dylib
 *.vst3/
+*.clap/
+
+# Системные файлы
+.DS_Store
+Thumbs.db

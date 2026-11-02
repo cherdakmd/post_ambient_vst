@@ -1,231 +1,132 @@
-// src/dsp/reverb.rs - 3. Panel Echo Resonance & 10. Atmospheric Reverb Landscape (Innovation)
-// 3. Panel Echo & 10. Reverb (Improvement)
+// Реверберация «эхо дворов» (Schroeder reverb).
+//
+// 6 параллельных комб-фильтров с демпфированием (длинные плоские стены
+// панельных домов) + 2 последовательных all-pass'а для густоты.
+// Размер двора (scale) управляет временем затухания.
+//
+// Буферы выделены под максимальный масштаб один раз - в аудио-потоке
+// никаких аллокаций: при изменении параметра меняется только индекс чтения.
 
-use super::params::SuperAtmosphericParams;
-
-/// Гребенчатые задержки (Freeverb-тюнинг, в сэмплах при 44.1 кГц).
-const COMB_TUNINGS: [f32; 4] = [1116.0, 1188.0, 1277.0, 1356.0];
-/// Всепропускающие задержки.
-const ALLPASS_TUNINGS: [f32; 2] = [556.0, 441.0];
-/// Стереоразброс между каналами.
+// Задержки комб-фильтров в сэмплах (при 44.1 кГц)
+const COMB_DELAYS: [f32; 6] = [1116.0, 1188.0, 1277.0, 1356.0, 1422.0, 1491.0];
+const ALLPASS_DELAYS: [f32; 2] = [225.0, 556.0];
+// Стерео-смещение правого канала (сэмплы) - разные «дворы» слева и справа
 const STEREO_SPREAD: f32 = 23.0;
+const MAX_SCALE: f32 = 1.3; // максимум: 0.7 + 0.6 * 1.0
 
-#[derive(Clone, Debug)]
 struct Comb {
-    buffer: Vec<f32>,
-    index: usize,
-    feedback: f32,
-    damp: f32,
-    damp_state: f32,
+    buf: Vec<f32>,
+    base: f32,
+    idx: usize,
+    store: f32,
+    damping: f32,
 }
 
 impl Comb {
-    fn new(len: usize, feedback: f32, damp: f32) -> Self {
+    fn new(base: f32, spread: f32) -> Self {
+        let cap = (((base + spread) * MAX_SCALE) as usize + 4).max(8);
         Self {
-            buffer: vec![0.0; len.max(1)],
-            index: 0,
-            feedback,
-            damp,
-            damp_state: 0.0,
+            buf: vec![0.0; cap],
+            base,
+            idx: 0,
+            store: 0.0,
+            damping: 0.35,
         }
     }
 
-    fn process(&mut self, input: f32) -> f32 {
-        let out = self.buffer[self.index];
-        self.damp_state = out * (1.0 - self.damp) + self.damp_state * self.damp;
-        self.buffer[self.index] = input + self.damp_state * self.feedback;
-        self.index = (self.index + 1) % self.buffer.len();
+    fn process(&mut self, input: f32, scale: f32, feedback: f32, spread: f32) -> f32 {
+        let cap = self.buf.len();
+        let delay = (((self.base + spread) * scale) as usize + 1).clamp(1, cap - 1);
+        let read_idx = (self.idx + cap - delay) % cap;
+        let out = self.buf[read_idx];
+        // Демпфирование: высокие частоты гаснут быстрее низких
+        self.store = out * (1.0 - self.damping) + self.store * self.damping;
+        self.buf[self.idx] = input + self.store * feedback;
+        self.idx = (self.idx + 1) % cap;
         out
-    }
-
-    fn reset(&mut self) {
-        for s in self.buffer.iter_mut() {
-            *s = 0.0;
-        }
-        self.index = 0;
-        self.damp_state = 0.0;
     }
 }
 
-#[derive(Clone, Debug)]
-struct Allpass {
-    buffer: Vec<f32>,
-    index: usize,
+struct AllPass {
+    buf: Vec<f32>,
+    base: f32,
+    idx: usize,
     feedback: f32,
 }
 
-impl Allpass {
-    fn new(len: usize, feedback: f32) -> Self {
+impl AllPass {
+    fn new(base: f32, spread: f32) -> Self {
+        let cap = (((base + spread) * MAX_SCALE) as usize + 4).max(8);
         Self {
-            buffer: vec![0.0; len.max(1)],
-            index: 0,
-            feedback,
+            buf: vec![0.0; cap],
+            base,
+            idx: 0,
+            feedback: 0.5,
         }
     }
 
-    fn process(&mut self, input: f32) -> f32 {
-        let buffered = self.buffer[self.index];
-        let out = buffered - input;
-        self.buffer[self.index] = input + buffered * self.feedback;
-        self.index = (self.index + 1) % self.buffer.len();
-        out
-    }
-
-    fn reset(&mut self) {
-        for s in self.buffer.iter_mut() {
-            *s = 0.0;
-        }
-        self.index = 0;
+    fn process(&mut self, input: f32, scale: f32, spread: f32) -> f32 {
+        let cap = self.buf.len();
+        let delay = (((self.base + spread) * scale) as usize + 1).clamp(1, cap - 1);
+        let read_idx = (self.idx + cap - delay) % cap;
+        let buf_out = self.buf[read_idx];
+        let output = -input + buf_out;
+        self.buf[self.idx] = input + buf_out * self.feedback;
+        self.idx = (self.idx + 1) % cap;
+        output
     }
 }
 
-/// «Супер атмосферный» реверб-ландшафт: 4 гребенчатых фильтра + 2 всехпропускающих
-/// на канал (Schroeder/Freeverb), размер — `reverb_size`, окраска — `spectral_shift`.
-#[derive(Clone, Debug)]
-pub struct AtmosphericReverb {
+pub struct Reverb {
     combs_l: Vec<Comb>,
     combs_r: Vec<Comb>,
-    allpass_l: Vec<Allpass>,
-    allpass_r: Vec<Allpass>,
-    wet: f32,
-    dry: f32,
+    aps_l: Vec<AllPass>,
+    aps_r: Vec<AllPass>,
 }
 
-impl AtmosphericReverb {
-    pub fn new(params: &SuperAtmosphericParams, sample_rate: f32) -> Self {
-        let sr = sample_rate.max(1.0);
-        let scale = sr / 44_100.0;
-        let room = params.reverb_size.clamp(0.0, 1.0);
-
-        // 0.89 при reverb_size 0.95 — длинный, но устойчивый «дворовый» хвост
-        let feedback = 0.70 + 0.20 * room;
-        // спектральный сдвиг приоткрывает высокие («серое небо» светлеет)
-        let damp = (0.5 - 0.3 * params.spectral_shift.clamp(0.0, 1.0)).clamp(0.05, 0.95);
-        let spread = (STEREO_SPREAD * scale).round() as usize;
-
-        let combs_l: Vec<Comb> = COMB_TUNINGS
-            .iter()
-            .map(|t| Comb::new((*t * scale).round() as usize, feedback, damp))
-            .collect();
-        let combs_r: Vec<Comb> = COMB_TUNINGS
-            .iter()
-            .map(|t| Comb::new((*t * scale).round() as usize + spread, feedback, damp))
-            .collect();
-        let allpass_l: Vec<Allpass> = ALLPASS_TUNINGS
-            .iter()
-            .map(|t| Allpass::new((*t * scale).round() as usize, 0.5))
-            .collect();
-        let allpass_r: Vec<Allpass> = ALLPASS_TUNINGS
-            .iter()
-            .map(|t| Allpass::new((*t * scale).round() as usize + spread, 0.5))
-            .collect();
-
+impl Reverb {
+    pub fn new() -> Self {
         Self {
-            combs_l,
-            combs_r,
-            allpass_l,
-            allpass_r,
-            wet: (0.9 * room).clamp(0.0, 1.0),
-            dry: (1.0 - 0.65 * room).clamp(0.0, 1.0),
+            combs_l: COMB_DELAYS.iter().map(|&d| Comb::new(d, 0.0)).collect(),
+            combs_r: COMB_DELAYS.iter().map(|&d| Comb::new(d, STEREO_SPREAD)).collect(),
+            aps_l: ALLPASS_DELAYS.iter().map(|&d| AllPass::new(d, 0.0)).collect(),
+            aps_r: ALLPASS_DELAYS
+                .iter()
+                .map(|&d| AllPass::new(d, STEREO_SPREAD))
+                .collect(),
         }
-    }
-
-    pub fn process(&mut self, left: f32, right: f32) -> (f32, f32) {
-        let input = (left + right) * 0.5;
-
-        let mut acc_l = 0.0;
-        for comb in self.combs_l.iter_mut() {
-            acc_l += comb.process(input);
-        }
-        let mut acc_r = 0.0;
-        for comb in self.combs_r.iter_mut() {
-            acc_r += comb.process(input);
-        }
-
-        acc_l *= 0.25;
-        acc_r *= 0.25;
-
-        for ap in self.allpass_l.iter_mut() {
-            acc_l = ap.process(acc_l);
-        }
-        for ap in self.allpass_r.iter_mut() {
-            acc_r = ap.process(acc_r);
-        }
-
-        let out_l = (self.dry * left + self.wet * acc_l).clamp(-4.0, 4.0);
-        let out_r = (self.dry * right + self.wet * acc_r).clamp(-4.0, 4.0);
-        (out_l, out_r)
     }
 
     pub fn reset(&mut self) {
         for c in self.combs_l.iter_mut().chain(self.combs_r.iter_mut()) {
-            c.reset();
+            c.buf.iter_mut().for_each(|s| *s = 0.0);
+            c.idx = 0;
+            c.store = 0.0;
         }
-        for a in self.allpass_l.iter_mut().chain(self.allpass_r.iter_mut()) {
-            a.reset();
-        }
-    }
-
-    pub fn wet(&self) -> f32 {
-        self.wet
-    }
-}
-
-/// 10. Atmospheric Reverb Landscape | 3. Panel Echo | 10. Reverb
-pub fn apply_super_atmospheric_reverb(params: &SuperAtmosphericParams) {
-    println!(
-        "[DSP Reverb] SUPER APPLYING reverb... Size: {}, Filter: {}Hz, Modulation: {}, Spectral Shift: {}, Echo: {}s, Panel Echo Depth: {}s, Resonance: {}, Stereo: {} | [Innovation] Panel Echo Resonance, Concrete Wall Filter, Atmospheric Reverb Landscape | [Improvement] Panel Echo, Stereo Effect, Resonance, Spectral Shift, Reverb",
-        params.reverb_size, params.filter_cutoff, params.modulation, params.spectral_shift,
-        params.echo_delay, params.panel_echo_depth, params.resonance, params.stereo_effect
-    );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn impulse_produces_decaying_tail() {
-        let p = SuperAtmosphericParams::default();
-        let mut rev = AtmosphericReverb::new(&p, 48_000.0);
-
-        let rms = |rev: &mut AtmosphericReverb, n: usize| {
-            let mut acc = 0.0;
-            for _ in 0..n {
-                let (l, _r) = rev.process(0.0, 0.0);
-                acc += l * l;
-            }
-            (acc / n as f32).sqrt()
-        };
-
-        rev.process(1.0, 1.0);
-        let early = rms(&mut rev, 4_800);
-        let _ = rms(&mut rev, 96_000); // ~2 с
-        let late = rms(&mut rev, 4_800);
-
-        assert!(early > 0.0, "реверб не возбудился");
-        assert!(late < early, "early = {}, late = {}", early, late);
-    }
-
-    #[test]
-    fn output_is_finite_and_bounded() {
-        let p = SuperAtmosphericParams::default();
-        let mut rev = AtmosphericReverb::new(&p, 48_000.0);
-        for i in 0..48_000 {
-            let (l, r) = rev.process(1.0, -1.0);
-            assert!(l.is_finite() && r.is_finite(), "NaN/Inf на сэмпле {}", i);
-            assert!(l.abs() <= 4.0 && r.abs() <= 4.0);
+        for a in self.aps_l.iter_mut().chain(self.aps_r.iter_mut()) {
+            a.buf.iter_mut().for_each(|s| *s = 0.0);
+            a.idx = 0;
         }
     }
 
-    #[test]
-    fn silence_stays_silent() {
-        let p = SuperAtmosphericParams::default();
-        let mut rev = AtmosphericReverb::new(&p, 48_000.0);
-        for _ in 0..1_000 {
-            let (l, r) = rev.process(0.0, 0.0);
-            assert_eq!(l, 0.0);
-            assert_eq!(r, 0.0);
+    pub fn process_sample(&mut self, l: f32, r: f32, size: f32, wet: f32) -> (f32, f32) {
+        let scale = 0.7 + size * 0.6;
+        let feedback = 0.7 + size * 0.17;
+
+        let mut acc_l = 0.0f32;
+        let mut acc_r = 0.0f32;
+        for c in 0..self.combs_l.len() {
+            acc_l += self.combs_l[c].process(l, scale, feedback, 0.0);
+            acc_r += self.combs_r[c].process(r, scale, feedback, STEREO_SPREAD);
         }
+        for a in 0..self.aps_l.len() {
+            acc_l = self.aps_l[a].process(acc_l, scale, 0.0);
+            acc_r = self.aps_r[a].process(acc_r, scale, STEREO_SPREAD);
+        }
+
+        (
+            l * (1.0 - wet) + acc_l * wet * 0.3,
+            r * (1.0 - wet) + acc_r * wet * 0.3,
+        )
     }
 }

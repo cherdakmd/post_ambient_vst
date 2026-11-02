@@ -1,44 +1,27 @@
 [package]
 name = "post_ambient_vst"
-version = "1.2.0"
+version = "3.0.0"
 edition = "2021"
-description = "Post Ambient VST (Southwest St. Petersburg - Super Atmospheric) - Rust & JavaScript Prototype"
-authors = ["cherdakmd", "arena-agent"]
+description = "Post-punk ambient soundscape generator for FL Studio (Southwest St. Petersburg)"
+license = "GPL-3.0-only"
 repository = "https://github.com/cherdakmd/post_ambient_vst"
 
+# VST3/CLAP плагин - это динамическая библиотека
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-nih-plug = { version = "0.6", features = ["vst3"] }
-egui = "0.24"
-egui-winit = "0.24"
-egui-dock = "0.8"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-log = "0.4"
-env_logger = "0.10"
+# Фича vst3 включена по умолчанию в nih-plug
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+# GUI на egui
+nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+# Декодер аудиофайлов (WAV/MP3/FLAC/OGG/AIFF/M4A) для сэмплера
+symphonia = { version = "0.6", features = ["mp3", "aac", "isomp4", "aiff"] }
+# Нативный диалог выбора файла
+rfd = "0.17"
 
-# 12 Крутых Фишек (Innovations v1.1.1) - Rust Dependencies
-# 1. SW Wind Gate (noise processing)
-# 2. Brutalist Texture Mapping (spectral processing)
-# 3. Panel Echo Resonance (echo/resonance sync)
-# 4. Post-Punk Sync (tempo/bpm sync)
-# 5. Courtyard Stereo Expansion (stereo width)
-# 6. Granular Noise Storm (granularity)
-# 7. Concrete Wall Filter (filter cutoff/resonance)
-# 8. Wind Dynamics Modulation (LFO modulation)
-# 9. Post-Punk Distortion Engine (distortion/texture)
-# 10. Atmospheric Reverb Landscape (reverb size/depth)
-# 11. Grey Sky GUI (brutalist theme/fonts)
-# 12. FL Studio Preset Bridge (JSON presets)
-
-[features]
-default = []
-super_atmospheric = [] # Включает все 12 фишек и 12 улучшений
+[workspace]
+members = [".", "xtask"]
 
 [profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-panic = "abort"
+lto = "thin"
