@@ -1,10 +1,12 @@
 # Rust
 /target/
 **/target/
-Cargo.lock
 
 # Node.js
 node_modules/
+
+# Рендеры (tools/dsp_standalone)
+output/
 
 # Сборки плагинов
 *.dll

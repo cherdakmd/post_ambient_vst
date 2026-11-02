@@ -28,10 +28,12 @@ pub mod editor;
 
 // Параметры живут в DSP-ядре (src/dsp/params.rs), чтобы ядро собиралось
 // без внешних зависимостей (nih-plug / egui) — см. tools/dsp_standalone.
-pub use crate::dsp::params::SuperAtmosphericParams;
+pub use crate::dsp::{params::SuperAtmosphericParams, SuperAtmosphericEngine};
 
 pub struct PostAmbientProcessor {
     params: Arc<Mutex<SuperAtmosphericParams>>,
+    // DSP-ядро: вся «супер атмосферная» цепочка (12 инноваций + 12 улучшений)
+    engine: SuperAtmosphericEngine,
     // Состояние GUI (11. Grey Sky GUI)
     gui_theme: String,
     gui_config: String,
@@ -43,6 +45,10 @@ impl PostAmbientProcessor {
     pub fn new() -> Self {
         Self {
             params: Arc::new(Mutex::new(SuperAtmosphericParams::default())),
+            engine: SuperAtmosphericEngine::new(
+                SuperAtmosphericParams::default(),
+                dsp::DEFAULT_SAMPLE_RATE,
+            ),
             gui_theme: "brutalist_grey_sky".to_string(),
             gui_config: "./gui/config_brutalist_grey_sky.json".to_string(),
             presets_path: "./presets/super_atmospheric_v1_1_1.json".to_string(),
@@ -50,9 +56,19 @@ impl PostAmbientProcessor {
     }
 }
 
+impl PostAmbientProcessor {
+    /// Вызывать из `Plugin::initialize`, когда хост сообщил частоту дискретизации.
+    pub fn set_sample_rate(&mut self, sample_rate: f32) {
+        self.engine.set_sample_rate(sample_rate);
+    }
+}
+
 impl Processor for PostAmbientProcessor {
     fn process(&mut self, context: &mut nih_plug::ProcessContext) {
-        let params = self.params.lock().unwrap();
+        // Параметры берём под замком и сразу отдаём движку (без перестройки линий задержки,
+        // чтобы автоматизация не сбрасывала хвосты эха и реверба).
+        let params = *self.params.lock().unwrap();
+        self.engine.update_params(params);
         let buffer = context.buffer();
         
         // Логика обработки (аналог JS process v1.1.1)
@@ -72,14 +88,26 @@ impl Processor for PostAmbientProcessor {
             self.gui_theme, self.gui_config, self.presets_path
         );
         
-        // Обработка буфера (заглушка для ручного слияния)
-        for i in 0..buffer.num_channels() {
-            for j in 0..buffer.num_samples() {
-                // Здесь будет применяться логика:
-                // noise_level, bass_frequency, reverb_size, filter_cutoff, distortion, modulation, granularity, tempo, resonance, stereo_effect, echo_delay, spectral_shift, brutalist_texture, southwest_wind, panel_echo_depth
-                let sample = buffer.channel_mut(i)[j];
-                // ... DSP ...
-                buffer.channel_mut(i)[j] = sample; // Заглушка
+        // Обработка буфера: реальная DSP-цепочка (src/dsp)
+        // noise_level, bass_frequency, reverb_size, filter_cutoff, distortion, modulation,
+        // granularity, tempo, resonance, stereo_effect, echo_delay, spectral_shift,
+        // brutalist_texture, southwest_wind, panel_echo_depth
+        let channels = buffer.num_channels();
+        let samples = buffer.num_samples();
+        if channels == 0 {
+            return;
+        }
+        for j in 0..samples {
+            let input_l = buffer.channel_mut(0)[j];
+            let input_r = if channels > 1 {
+                buffer.channel_mut(1)[j]
+            } else {
+                input_l
+            };
+            let (out_l, out_r) = self.engine.process(input_l, input_r);
+            buffer.channel_mut(0)[j] = out_l;
+            if channels > 1 {
+                buffer.channel_mut(1)[j] = out_r;
             }
         }
     }
