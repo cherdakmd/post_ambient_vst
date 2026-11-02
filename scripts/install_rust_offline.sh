@@ -32,7 +32,14 @@ pkg_name() {
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-mkdir -p "$RUST_PREFIX" 2>/dev/null || sudo mkdir -p "$RUST_PREFIX"
+# Каталог установки: создаём (при необходимости через sudo) и отдаём пользователю,
+# иначе штатный rust-installer не сможет писать в /opt/rust.
+if [[ ! -d "$RUST_PREFIX" ]]; then
+  mkdir -p "$RUST_PREFIX" 2>/dev/null || sudo mkdir -p "$RUST_PREFIX"
+fi
+if [[ ! -w "$RUST_PREFIX" ]] && command -v sudo >/dev/null 2>&1; then
+  sudo chown -R "$(id -u):$(id -g)" "$RUST_PREFIX"
+fi
 
 echo "==> Установка Rust ${RUST_VERSION} (${TRIPLE}) в ${RUST_PREFIX}"
 
