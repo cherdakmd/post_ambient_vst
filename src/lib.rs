@@ -1,29 +1,31 @@
 // post_ambient_vst - VST3/CLAP плагин для FL Studio (Rust + nih-plug).
 //
-// «Звук Юго-Запада Санкт-Петербурга в стиле пост-панк 2000-х».
+// «Jungle Ambient VST»: брейк-слайсер + суб-бас + эмбиент-пад.
 //
 // Пайплайн (в реальном времени, без аллокаций в audio-потоке):
-//   дорожки (шум + басс + пад) -> «бетонный» фильтр -> дисторшн
-//   -> ping-pong эхо -> Schroeder-реверб -> стерео -> мастер.
+//   брейк (встроенный амен-паттерн или слайсы своего файла)
+//   + суб-бас + пад -> фильтр -> дисторшн -> ping-pong эхо
+//   -> Schroeder-реверб -> стерео -> мастер.
 //
-// Каждую дорожку можно выключить параметром (Noise/Bass/Pad) - так один
-// инстанс даёт шум, другой - бас, третий - пад, и дальше микшируются в FL.
+// Каждую дорожку можно выключить параметром (Break/Bass/Pad) - так один
+// инстанс даёт брейк, другой - бас, третий - пад, и дальше микшируются в FL.
 
 use nih_plug::prelude::*;
 use std::f32::consts::TAU;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 mod dsp;
 mod editor;
 mod sample;
-use dsp::bass::BassSynth;
+use dsp::bass::SubBass;
+use dsp::breaks::{BreakMode, BreakPattern};
 use dsp::echo::Echo;
 use dsp::filters::StateVariableFilter;
-use dsp::noise::{NoiseState, NoiseType};
 use dsp::pad::PadSynth;
 use dsp::reverb::Reverb;
 use nih_plug_egui::EguiState;
-use sample::{SamplerVoice, SampleShared};
+use sample::{SampleShared, Slicer};
 
 /// Стек зажатых нот (монофонный «последняя нота сверху», без аллокаций).
 struct NoteStack {
@@ -75,29 +77,32 @@ pub struct PostAmbient {
     params: Arc<PostAmbientParams>,
     sample_rate: f32,
 
-    // Состояние DSP
-    noise: NoiseState,
-    bass: BassSynth,
+    // --- Три дорожки ядра ---
+    brk: BreakPattern,
+    slicer: Slicer,
+    bass: SubBass,
     pad: PadSynth,
+
+    // --- FX-цепочка ---
     concrete_l: StateVariableFilter,
     concrete_r: StateVariableFilter,
     haas: Vec<f32>,
     haas_idx: usize,
     echo: Echo,
     reverb: Reverb,
-    // Время для LFO «ветра» в цепочке эффектов (секунды)
+    // Время для LFO в цепочке эффектов (секунды)
     fx_time: f64,
-    last_seed: i32,
 
-    // --- MIDI-гейт: звук только пока зажаты ноты ---
+    // --- MIDI-гейт: бас и пад звучат пока зажаты ноты ---
     held: NoteStack,
     gate_env: f32,
     gate_target: f32,
     /// Уровень гейта для MIDI-LED в GUI (безопасно для audio-потока).
     gate_level: Arc<AtomicF32>,
+    /// Текущий шаг брейка (0..31) для ленты шагов в GUI.
+    break_step: Arc<AtomicU32>,
 
-    // --- Сэмплер: свой аудиофайл через всю FX-цепочку ---
-    sampler: SamplerVoice,
+    /// Свой файл брейка: фоновый декодер пишет, audio-поток читает.
     pub sample_shared: Arc<SampleShared>,
 }
 
@@ -108,40 +113,38 @@ pub struct PostAmbientParams {
     pub editor_state: Arc<EguiState>,
 
     // --- Дорожки (стемы) ---
-    #[id = "noise_on"]
-    pub noise_on: BoolParam,
+    #[id = "break_on"]
+    pub break_on: BoolParam,
     #[id = "bass_on"]
     pub bass_on: BoolParam,
     #[id = "pad_on"]
     pub pad_on: BoolParam,
 
-    // --- Шум ---
-    #[id = "noise_type"]
-    pub noise_type: EnumParam<NoiseType>,
-    #[id = "noise_lvl"]
-    pub noise_level: FloatParam,
-    #[id = "granularity"]
-    pub granularity: FloatParam,
-    #[id = "modulation"]
-    pub modulation: FloatParam,
-    #[id = "seed"]
-    pub seed: IntParam,
+    // --- Брейк ---
+    #[id = "break_mode"]
+    pub break_mode: EnumParam<BreakMode>,
+    #[id = "break_level"]
+    pub break_level: FloatParam,
+    #[id = "swing"]
+    pub swing: FloatParam,
 
-    // --- Бас (транспонирование относительно зажатой ноты) ---
+    // --- Суб-бас ---
     #[id = "bass_tune"]
     pub bass_tune: IntParam,
-    #[id = "bass_boost"]
-    pub bass_boost: FloatParam,
+    #[id = "drop"]
+    pub drop: FloatParam,
     #[id = "glide"]
     pub glide: FloatParam,
     #[id = "distortion"]
     pub distortion: FloatParam,
 
-    // --- Атмосфера ---
+    // --- Эмбиент / FX ---
     #[id = "filter"]
     pub filter_cutoff: FloatParam,
     #[id = "resonance"]
     pub resonance: FloatParam,
+    #[id = "modulation"]
+    pub modulation: FloatParam,
     #[id = "echo"]
     pub echo_delay: FloatParam,
     #[id = "reverb"]
@@ -149,19 +152,11 @@ pub struct PostAmbientParams {
     #[id = "stereo"]
     pub stereo_width: FloatParam,
 
-    // --- Темп ---
+    // --- Темп (общий «СИНК»: брейк + эхо) ---
     #[id = "tempo_sync"]
     pub tempo_sync: BoolParam,
     #[id = "tempo"]
     pub tempo: FloatParam,
-
-    // --- Сэмплер (свой аудиофайл) ---
-    #[id = "sample_on"]
-    pub sample_on: BoolParam,
-    #[id = "sample_loop"]
-    pub sample_loop: BoolParam,
-    #[id = "sample_lvl"]
-    pub sample_level: FloatParam,
 
     // --- Режим гейта ---
     #[id = "note_gate"]
@@ -177,8 +172,9 @@ impl Default for PostAmbient {
         Self {
             params: Arc::new(PostAmbientParams::default()),
             sample_rate: 1.0,
-            noise: NoiseState::new(1.0, 42),
-            bass: BassSynth::new(1.0),
+            brk: BreakPattern::new(),
+            slicer: Slicer::new(),
+            bass: SubBass::new(),
             pad: PadSynth::new(1.0, 42),
             concrete_l: StateVariableFilter::new(1.0),
             concrete_r: StateVariableFilter::new(1.0),
@@ -187,14 +183,13 @@ impl Default for PostAmbient {
             echo: Echo::new(8192),
             reverb: Reverb::new(),
             fx_time: 0.0,
-            last_seed: 42,
 
             held: NoteStack::new(),
             gate_env: 0.0,
             gate_target: 0.0,
             gate_level: Arc::new(AtomicF32::new(0.0)),
+            break_step: Arc::new(AtomicU32::new(0)),
 
-            sampler: SamplerVoice::new(),
             sample_shared: SampleShared::new(),
         }
     }
@@ -210,21 +205,15 @@ fn p01(name: &'static str, default: f32) -> FloatParam {
 impl Default for PostAmbientParams {
     fn default() -> Self {
         Self {
-            editor_state: EguiState::from_size(470, 700),
+            editor_state: EguiState::from_size(470, 720),
 
-            noise_on: BoolParam::new("Noise (wind/radio)", true),
-            bass_on: BoolParam::new("Bass", true),
-            pad_on: BoolParam::new("Pad", true),
+            break_on: BoolParam::new("Break", true),
+            bass_on: BoolParam::new("Sub Bass", true),
+            pad_on: BoolParam::new("Ambient Pad", true),
 
-            noise_type: EnumParam::new("Noise Type", NoiseType::Mixed),
-            noise_level: p01("Noise Level", 0.5),
-            granularity: p01("Granularity", 0.7),
-            modulation: p01("Modulation", 0.2),
-            seed: IntParam::new(
-                "Seed (randomizer)",
-                42,
-                IntRange::Linear { min: 0, max: 999_999 },
-            ),
+            break_mode: EnumParam::new("Break Mode", BreakMode::BuiltIn),
+            break_level: p01("Break Level", 0.8),
+            swing: p01("Swing", 0.15),
 
             bass_tune: IntParam::new(
                 "Bass Tune (semitones)",
@@ -232,13 +221,13 @@ impl Default for PostAmbientParams {
                 IntRange::Linear { min: -12, max: 12 },
             )
             .with_unit(" st"),
-            bass_boost: p01("Bass Boost", 0.5),
-            glide: p01("Glide (slide)", 0.35),
-            distortion: p01("Distortion", 0.3),
+            drop: p01("808 Drop", 0.45),
+            glide: p01("Glide (slide)", 0.15),
+            distortion: p01("Distortion", 0.25),
 
             filter_cutoff: FloatParam::new(
                 "Filter Cutoff",
-                1000.0,
+                1400.0,
                 FloatRange::Skewed {
                     min: 100.0,
                     max: 12_000.0,
@@ -248,30 +237,27 @@ impl Default for PostAmbientParams {
             .with_smoother(SmoothingStyle::Logarithmic(50.0))
             .with_value_to_string(formatters::v2s_f32_hz_then_khz(0))
             .with_string_to_value(formatters::s2v_f32_hz_then_khz()),
-            resonance: p01("Resonance", 0.4),
+            resonance: p01("Resonance", 0.35),
+            modulation: p01("Modulation", 0.25),
             echo_delay: FloatParam::new(
                 "Echo Delay",
-                1.2,
+                0.35,
                 FloatRange::Linear { min: 0.1, max: 3.0 },
             )
             .with_smoother(SmoothingStyle::Linear(100.0))
             .with_step_size(0.01)
             .with_unit(" s"),
-            reverb_size: p01("Reverb Size", 0.8),
-            stereo_width: p01("Stereo (courtyards)", 0.6),
+            reverb_size: p01("Reverb Size", 0.75),
+            stereo_width: p01("Stereo Width", 0.6),
 
-            tempo_sync: BoolParam::new("Sync Tempo to Host", false),
+            tempo_sync: BoolParam::new("Sync Tempo to Host", true),
             tempo: FloatParam::new(
                 "Tempo",
-                100.0,
-                FloatRange::Linear { min: 60.0, max: 160.0 },
+                174.0,
+                FloatRange::Linear { min: 60.0, max: 180.0 },
             )
             .with_step_size(1.0)
             .with_unit(" BPM"),
-
-            sample_on: BoolParam::new("Sample Track", true),
-            sample_loop: BoolParam::new("Sample Loop", true),
-            sample_level: p01("Sample Level", 0.7),
 
             note_gate: BoolParam::new("Gate By Notes", true),
 
@@ -293,7 +279,7 @@ impl Default for PostAmbientParams {
 }
 
 impl Plugin for PostAmbient {
-    const NAME: &'static str = "Post Ambient VST";
+    const NAME: &'static str = "Jungle Ambient VST";
     const VENDOR: &'static str = "cherdakmd";
     const URL: &'static str = "https://github.com/cherdakmd/post_ambient_vst";
     const EMAIL: &'static str = "cherdakmd@users.noreply.github.com";
@@ -327,6 +313,7 @@ impl Plugin for PostAmbient {
         editor::create(
             self.params.clone(),
             self.gate_level.clone(),
+            self.break_step.clone(),
             self.sample_shared.clone(),
         )
     }
@@ -339,11 +326,11 @@ impl Plugin for PostAmbient {
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
         let sr = self.sample_rate;
-        let seed = self.params.seed.value() as u32;
 
-        self.noise = NoiseState::new(sr, seed);
-        self.bass = BassSynth::new(sr);
-        self.pad = PadSynth::new(sr, seed);
+        self.brk = BreakPattern::new();
+        self.slicer = Slicer::new();
+        self.bass = SubBass::new();
+        self.pad = PadSynth::new(sr, 42);
         self.concrete_l = StateVariableFilter::new(sr);
         self.concrete_r = StateVariableFilter::new(sr);
 
@@ -354,14 +341,13 @@ impl Plugin for PostAmbient {
         self.reverb = Reverb::new();
 
         self.fx_time = 0.0;
-        self.last_seed = self.params.seed.value();
 
         true
     }
 
     fn reset(&mut self) {
-        let seed = self.params.seed.value() as u32;
-        self.noise.reseed(self.sample_rate, seed);
+        self.brk.reset();
+        self.slicer.all_off();
         self.bass.reset();
         self.pad.reset();
         self.concrete_l.reset();
@@ -374,6 +360,7 @@ impl Plugin for PostAmbient {
         self.held.clear();
         self.gate_env = 0.0;
         self.gate_target = 0.0;
+        self.break_step.store(0, Ordering::Relaxed);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -386,26 +373,22 @@ impl Plugin for PostAmbient {
         let sr = self.sample_rate;
 
         // --- Настройки на границе блока ---
-        let noise_on = self.params.noise_on.value();
+        let break_on = self.params.break_on.value();
+        let break_mode = self.params.break_mode.value();
         let bass_on = self.params.bass_on.value();
         let pad_on = self.params.pad_on.value();
-        let sample_on = self.params.sample_on.value();
-        let sample_loop = self.params.sample_loop.value();
-        let sample_level = self.params.sample_level.value();
         let note_gate = self.params.note_gate.value();
         let tempo_sync = self.params.tempo_sync.value();
-        let kind = self.params.noise_type.value();
-
-        // --- Подхватываем новый сэмпл (try_lock - без блокировки audio-потока) ---
-        if let Ok(guard) = self.sample_shared.loaded.try_lock() {
-            let new = guard.as_ref().map(|a| a.clone());
-            self.sampler.set_sample(new);
-        }
-
         // Транспонирование баса относительно зажатой ноты (полутона)
         let tune_factor = 2.0f32.powf(self.params.bass_tune.value() as f32 / 12.0);
 
-        // --- MIDI: ноты управляют басом и падом ---
+        // --- Подхватываем новый файл брейка (try_lock - без блокировки) ---
+        if let Ok(guard) = self.sample_shared.loaded.try_lock() {
+            let new = guard.as_ref().map(|a| a.clone());
+            self.slicer.set_sample(new, sr);
+        }
+
+        // --- MIDI: ноты управляют басом, падом и слайсами своего файла ---
         while let Some(event) = context.next_event() {
             match event {
                 NoteEvent::NoteOn { note, .. } => {
@@ -415,8 +398,9 @@ impl Plugin for PostAmbient {
                     self.bass.set_note(hz * tune_factor);
                     self.bass.set_gate(true);
                     self.pad.note_on(hz, note);
-                    if sample_on {
-                        self.sampler.retrigger(note, sr);
+                    // Свой файл: нота C2.. = слайс 0..15
+                    if break_mode == BreakMode::File {
+                        self.slicer.trigger(note);
                     }
                 }
                 NoteEvent::NoteOff { note, .. } => {
@@ -439,6 +423,7 @@ impl Plugin for PostAmbient {
                     self.gate_target = 0.0;
                     self.bass.set_gate(false);
                     self.pad.all_off();
+                    self.slicer.all_off();
                 }
                 _ => (),
             }
@@ -448,14 +433,7 @@ impl Plugin for PostAmbient {
         let gate_on_coef = 1.0 - (-1.0 / (0.008 * sr)).exp();
         let gate_off_coef = 1.0 - (-1.0 / (0.12 * sr)).exp();
 
-        // Рандомайзер: новый seed = новый паттерн шума
-        let seed = self.params.seed.value();
-        if seed != self.last_seed {
-            self.noise.reseed(sr, seed as u32);
-            self.last_seed = seed;
-        }
-
-        // Темп: от хоста (BPM из FL) или ручной — для синхронизации эхо
+        // Темп: от хоста (BPM из FL) или ручной - общий «СИНК» для брейка и эхо
         let bpm = if tempo_sync {
             context
                 .transport()
@@ -466,62 +444,56 @@ impl Plugin for PostAmbient {
         } else {
             self.params.tempo.value()
         };
-        // Эхо-синк: восьмая нота от BPM (когда «СИНХР ЭХО» включён)
+        // Эхо-синк: восьмая нота от BPM
         let echo_sync_time = (30.0 / bpm).clamp(0.1, 3.0);
 
         for channel_samples in buffer.iter_samples() {
             // Сглаживание параметров (обязательно вызывать каждый сэмпл)
-            let noise_level = self.params.noise_level.smoothed.next();
-            let granularity = self.params.granularity.smoothed.next();
-            let modulation = self.params.modulation.smoothed.next();
-            let bass_boost = self.params.bass_boost.smoothed.next();
+            let break_level = self.params.break_level.smoothed.next();
+            let swing = self.params.swing.smoothed.next();
+            let drop = self.params.drop.smoothed.next();
             let glide = self.params.glide.smoothed.next();
             let distortion = self.params.distortion.smoothed.next();
             let filter_cutoff = self.params.filter_cutoff.smoothed.next();
             let resonance = self.params.resonance.smoothed.next();
+            let modulation = self.params.modulation.smoothed.next();
             let echo_delay = self.params.echo_delay.smoothed.next();
             let reverb_size = self.params.reverb_size.smoothed.next();
             let stereo_width = self.params.stereo_width.smoothed.next();
             let output_gain = self.params.output.smoothed.next();
 
-            // --- Микс дорожек ---
             let mut l = 0.0f32;
             let mut r = 0.0f32;
 
-            if noise_on {
-                let n = self
-                    .noise
-                    .next_sample(sr, kind, noise_level, granularity, modulation);
-                // Ранняя стерео-картина: микро-задержка Хааса на правом канале
-                let cap = self.haas.len();
-                let d = (((0.15 + stereo_width * 0.35) * sr * 0.004) as usize).clamp(1, cap - 1);
-                let n_r = self.haas[(self.haas_idx + cap - d) % cap];
-                self.haas[self.haas_idx] = n;
-                self.haas_idx = (self.haas_idx + 1) % cap;
-                l += n;
-                r += n_r;
+            // --- Брейк: встроенный амен-паттерн ИЛИ слайсы своего файла ---
+            // Не закрывается MIDI-гейтом: это «барабанная машина».
+            if break_on {
+                let (bl, br) = if break_mode == BreakMode::BuiltIn {
+                    self.brk.next_sample(sr, bpm, swing)
+                } else {
+                    self.slicer.next_sample()
+                };
+                l += bl * break_level;
+                r += br * break_level;
             }
 
+            // --- Гейт-управляемые дорожки (бас + пад) ---
+            let mut nl = 0.0f32;
+            let mut nr = 0.0f32;
+
             if bass_on {
-                let b = self.bass.next_sample(sr, glide, resonance, distortion, bass_boost);
-                l += b * 0.8;
-                r += b * 0.8;
+                let b = self.bass.next_sample(sr, glide, drop, distortion);
+                nl += b * 0.85;
+                nr += b * 0.85;
             }
 
             if pad_on {
                 let (pl, pr) = self.pad.next_sample(sr, modulation);
-                l += pl * 1.1;
-                r += pr * 1.1;
+                nl += pl * 1.1;
+                nr += pr * 1.1;
             }
 
-            // --- Сэмплер: свой файл через всю FX-цепочку ---
-            if sample_on {
-                let (sl, sr_) = self.sampler.next_sample(sample_loop);
-                l += sl * sample_level;
-                r += sr_ * sample_level;
-            }
-
-            // --- MIDI-гейт: звук только пока зажаты ноты ---
+            // --- MIDI-гейт: бас и пад звучат только пока зажаты ноты ---
             // Применяется до FX - хвосты эхо/реверба свободно «дозваниваются».
             let target = if note_gate { self.gate_target } else { 1.0 };
             let coef = if target > self.gate_env {
@@ -530,10 +502,12 @@ impl Plugin for PostAmbient {
                 gate_off_coef
             };
             self.gate_env += (target - self.gate_env) * coef;
-            l *= self.gate_env;
-            r *= self.gate_env;
+            nl *= self.gate_env;
+            nr *= self.gate_env;
+            l += nl;
+            r += nr;
 
-            // --- «Бетонные стены»: резонансный фильтр с ветровой модуляцией ---
+            // --- Фильтр с медленной модуляцией ---
             let t = self.fx_time;
             let lfo = 1.0
                 + modulation * 0.45 * (TAU as f64 * 0.11 * t).sin() as f32
@@ -556,7 +530,7 @@ impl Plugin for PostAmbient {
                 r = r * (1.0 - mix) + mixed * mix;
             }
 
-            // --- Эхо «панельные дома» (ping-pong, синхронизируемое с темпом) ---
+            // --- Эхо (ping-pong, синхронизируемое с темпом) ---
             let echo_time = if tempo_sync { echo_sync_time } else { echo_delay };
             let delay_samples = (echo_time * sr) as usize;
             let (el, er) = self.echo.process_sample(
@@ -569,13 +543,13 @@ impl Plugin for PostAmbient {
             l = el;
             r = er;
 
-            // --- Реверберация «эхо дворов» ---
+            // --- Реверберация ---
             let wet = 0.22 + reverb_size * 0.4;
             let (rl, rr) = self.reverb.process_sample(l, r, reverb_size, wet);
             l = rl;
             r = rr;
 
-            // --- Стерео «дворы» (Mid/Side) ---
+            // --- Стерео (Mid/Side) ---
             let g = 1.0 + stereo_width * 1.3;
             let mid = (l + r) * 0.5;
             let side = (l - r) * 0.5 * g;
@@ -597,9 +571,10 @@ impl Plugin for PostAmbient {
             }
         }
 
-        // Уровень гейта для MIDI-LED в GUI
-        self.gate_level
-            .store(self.gate_env, std::sync::atomic::Ordering::Relaxed);
+        // Уровень гейта для MIDI-LED и текущий шаг брейка для ленты в GUI
+        self.gate_level.store(self.gate_env, Ordering::Relaxed);
+        self.break_step
+            .store(self.brk.current_step() as u32, Ordering::Relaxed);
 
         ProcessStatus::Normal
     }
@@ -608,7 +583,7 @@ impl Plugin for PostAmbient {
 impl ClapPlugin for PostAmbient {
     const CLAP_ID: &'static str = "com.cherdakmd.post-ambient-vst";
     const CLAP_DESCRIPTION: Option<&'static str> =
-        Some("Post-punk ambient soundscape generator (Southwest St. Petersburg)");
+        Some("Jungle break slicer, sub bass and ambient pad");
     const CLAP_MANUAL_URL: Option<&'static str> = Some(Self::URL);
     const CLAP_SUPPORT_URL: Option<&'static str> = None;
     const CLAP_FEATURES: &'static [ClapFeature] = &[

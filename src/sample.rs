@@ -156,127 +156,223 @@ pub fn spawn_load(path: PathBuf, shared: Arc<SampleShared>) {
     });
 }
 
-// ---------------------------------------------------------------- голос сэмплера
+// ---------------------------------------------------------------- слайсер брейка
 
-/// Монофонический голос сэмплера: линейная интерполяция, транспонирование
-/// по MIDI-ноте, петля с кроссфейдом, перезапуск по NoteOn.
-pub struct SamplerVoice {
-    current: Option<Arc<LoadedSample>>,
+/// 16 равных слайсов загруженного файла.
+/// Нота 36 (C2) = слайс 0, дальше по полутонам; октавы повторяют набор.
+pub const SLICES: usize = 16;
+const MAX_SLICE_VOICES: usize = 8;
+
+struct SliceVoice {
+    sample: Option<Arc<LoadedSample>>,
+    slice: usize,
     pos: f64,
+    start: f64,
+    end: f64,
     playing: bool,
-    note: u8,
-    ratio: f64,
 }
 
-impl SamplerVoice {
+/// Слайсер: NoteOn -> проигрывание слайса до его границы (одноразово),
+/// фейды 3 мс на границах против щелчков, до 8 голосов.
+pub struct Slicer {
+    voices: [SliceVoice; MAX_SLICE_VOICES],
+    sample: Option<Arc<LoadedSample>>,
+    /// file_sr / engine_sr - сохраняем высоту файла независимо от SR хоста.
+    ratio: f64,
+    engine_sr: f32,
+}
+
+impl Slicer {
     pub fn new() -> Self {
         Self {
-            current: None,
-            pos: 0.0,
-            playing: false,
-            note: 60,
+            voices: std::array::from_fn(|_| SliceVoice {
+                sample: None,
+                slice: 0,
+                pos: 0.0,
+                start: 0.0,
+                end: 0.0,
+                playing: false,
+            }),
+            sample: None,
             ratio: 1.0,
+            engine_sr: 44_100.0,
         }
     }
 
-    /// Подхватывает новый сэмпл (сброс позиции только если файл реально сменился).
-    pub fn set_sample(&mut self, sample: Option<Arc<LoadedSample>>) {
-        let changed = match (&self.current, &sample) {
+    /// Подхватывает новый файл (сброс голосов только если файл реально сменился).
+    pub fn set_sample(&mut self, sample: Option<Arc<LoadedSample>>, engine_sr: f32) {
+        let changed = match (&self.sample, &sample) {
             (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
             (None, None) => false,
             _ => true,
         };
         if changed {
-            self.current = sample;
-            self.pos = 0.0;
-            self.playing = self.current.is_some();
-            self.update_ratio(48_000.0);
-        }
-    }
-
-    /// Перезапуск с новой нотой (вызывается по NoteOn).
-    pub fn retrigger(&mut self, note: u8, engine_sr: f32) {
-        self.note = note;
-        if self.current.is_some() {
-            self.pos = 0.0;
-            self.playing = true;
-        }
-        self.update_ratio(engine_sr);
-    }
-
-    fn update_ratio(&mut self, engine_sr: f32) {
-        if let Some(s) = &self.current {
-            // Нота 60 (до) = исходная высота; выше - быстрее и выше
-            let pitch = 2.0f64.powf((self.note as f64 - 60.0) / 12.0);
-            self.ratio = pitch * (s.sample_rate as f64 / engine_sr as f64);
-        }
-    }
-
-    /// Следующая стереопара сэмплов.
-    pub fn next_sample(&mut self, looped: bool) -> (f32, f32) {
-        let Some(s) = self.current.as_ref() else {
-            return (0.0, 0.0);
-        };
-        if !self.playing || s.frames == 0 {
-            return (0.0, 0.0);
-        }
-        let n = s.frames as f64;
-        if self.pos >= n {
-            if looped {
-                self.pos %= n;
-            } else {
-                self.playing = false;
-                return (0.0, 0.0);
+            self.sample = sample;
+            for v in &mut self.voices {
+                v.playing = false;
+                v.sample = None;
             }
         }
-        let out = read_interp(s, self.pos, looped);
-        self.pos += self.ratio;
-        out
+        if changed || engine_sr != self.engine_sr {
+            self.engine_sr = engine_sr;
+            self.ratio = self
+                .sample
+                .as_ref()
+                .map(|s| s.sample_rate as f64 / engine_sr as f64)
+                .unwrap_or(1.0);
+        }
+    }
+
+    /// NoteOn: нота -> слайс (C2 = 0, октавы повторяют набор из 16).
+    pub fn trigger(&mut self, note: u8) {
+        let Some(s) = self.sample.clone() else {
+            return;
+        };
+        if s.frames < SLICES {
+            return;
+        }
+        let idx = (note as i32 - 36).rem_euclid(SLICES as i32) as usize;
+        let start = s.frames * idx / SLICES;
+        let end = s.frames * (idx + 1) / SLICES;
+        if end <= start {
+            return;
+        }
+
+        // Перезапуск того же слайса, иначе свободный голос, иначе кража первого
+        let voice = self
+            .voices
+            .iter()
+            .position(|v| v.playing && v.slice == idx)
+            .or_else(|| self.voices.iter().position(|v| !v.playing))
+            .unwrap_or(0);
+
+        let v = &mut self.voices[voice];
+        v.sample = Some(s);
+        v.slice = idx;
+        v.start = start as f64;
+        v.end = end as f64;
+        v.pos = v.start;
+        v.playing = true;
+    }
+
+    /// Останавливает все голосы (Choke / сброс).
+    pub fn all_off(&mut self) {
+        for v in &mut self.voices {
+            v.playing = false;
+        }
+    }
+
+    /// Стереопара активных слайсов.
+    pub fn next_sample(&mut self) -> (f32, f32) {
+        let mut l = 0.0f32;
+        let mut r = 0.0f32;
+        let fade = (self.engine_sr as f64 * 0.003).max(1.0); // фейд 3 мс
+
+        for v in &mut self.voices {
+            if !v.playing {
+                continue;
+            }
+            let Some(s) = v.sample.clone() else {
+                v.playing = false;
+                continue;
+            };
+            if s.frames == 0 || v.pos >= v.end - 1.0 {
+                v.playing = false;
+                continue;
+            }
+
+            // Линейная интерполяция по позиции
+            let fi = v.pos.floor();
+            let idx = (fi as usize).min(s.frames - 1);
+            let frac = (v.pos - fi) as f32;
+            let get = |i: usize| -> (f32, f32) {
+                let i = i.min(s.frames - 1);
+                let base = i * s.channels;
+                let a = s.data[base];
+                let b = if s.channels > 1 { s.data[base + 1] } else { a };
+                (a, b)
+            };
+            let (a0, b0) = get(idx);
+            let (a1, b1) = get(idx + 1);
+            let sl = a0 + (a1 - a0) * frac;
+            let sr_ = b0 + (b1 - b0) * frac;
+
+            // Анти-щелчковые фейды на границах слайса
+            let in_f = ((v.pos - v.start) / fade).clamp(0.0, 1.0);
+            let out_f = ((v.end - v.pos) / fade).clamp(0.0, 1.0);
+            let g = (in_f * out_f) as f32;
+            l += sl * g;
+            r += sr_ * g;
+
+            v.pos += self.ratio;
+        }
+
+        (l, r)
     }
 }
 
-/// Чтение сэмпла с линейной интерполяцией; при петле - кроссфейд хвоста в голову.
-fn read_interp(s: &LoadedSample, pos: f64, looped: bool) -> (f32, f32) {
-    let n = s.frames;
-    let ch = s.channels;
-    let get = |i: usize| -> (f32, f32) {
-        let i = if i >= n {
-            if looped {
-                i % n
-            } else {
-                n - 1
-            }
-        } else {
-            i
-        };
-        let base = i * ch;
-        let a = s.data[base];
-        let b = if ch > 1 { s.data[base + 1] } else { a };
-        (a, b)
-    };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let fi = pos.floor();
-    let idx = fi as usize;
-    let frac = (pos - fi) as f32;
-    let (a0, b0) = get(idx);
-    let (a1, b1) = get(idx + 1);
-    let mut l = a0 + (a1 - a0) * frac;
-    let mut r = b0 + (b1 - b0) * frac;
-
-    // Кроссфейд петли: последние ~10 мс хвоста растворяются в начале файла
-    if looped && n > 8 {
-        let xf = ((n / 8).max(64)).min((s.sample_rate as usize) / 100).min(n);
-        if xf > 1 && idx + xf >= n && idx < n {
-            let head = idx + xf - n; // индекс в голове файла
-            let (h0l, h0r) = get(head);
-            let (h1l, h1r) = get(head + 1);
-            let hl = h0l + (h1l - h0l) * frac;
-            let hr = h0r + (h1r - h0r) * frac;
-            let w = ((idx + xf - n) as f32 / xf as f32).clamp(0.0, 1.0);
-            l = l * (1.0 - w) + hl * w;
-            r = r * (1.0 - w) + hr * w;
+    fn make_sample(frames: usize) -> Arc<LoadedSample> {
+        // Стерео-файл: левый =1, правый = -1 (для проверки каналов)
+        let mut data = Vec::with_capacity(frames * 2);
+        for _ in 0..frames {
+            data.push(1.0);
+            data.push(-1.0);
         }
+        Arc::new(LoadedSample {
+            name: "test.wav".into(),
+            channels: 2,
+            frames,
+            sample_rate: 44_100.0,
+            data,
+        })
     }
 
-    (l, r)
+    #[test]
+    fn slicer_is_silent_without_file() {
+        let mut s = Slicer::new();
+        s.trigger(60);
+        let (l, r) = s.next_sample();
+        assert_eq!((l, r), (0.0, 0.0));
+    }
+
+    #[test]
+    fn note_maps_to_slice_and_plays_to_its_end() {
+        let mut s = Slicer::new();
+        s.set_sample(Some(make_sample(16_000)), 44_100.0); // 16 слайсов по 1000 фреймов
+        s.trigger(36); // слайс 0: [0, 1000)
+
+        let mut peak = 0.0f32;
+        let mut frames_played = 0;
+        for _ in 0..4_000 {
+            let (l, r) = s.next_sample();
+            if l != 0.0 || r != 0.0 {
+                frames_played += 1;
+            }
+            peak = peak.max(l.abs()).max(r.abs());
+        }
+        assert!(peak > 0.5, "слайс должен звучать, peak={peak}");
+        // Слайс = 1000 фреймов + запас на фейды - голос должен замолчать
+        assert!(frames_played < 1_200, "голос не должен играть дальше слайса: {frames_played}");
+        let (l, r) = s.next_sample();
+        assert_eq!((l, r), (0.0, 0.0), "после слайса - тишина");
+    }
+
+    #[test]
+    fn higher_octave_repeats_slices() {
+        let mut s = Slicer::new();
+        s.set_sample(Some(make_sample(16_000)), 44_100.0);
+        s.trigger(36); // слайс 0
+        s.trigger(48); // та же нота октавой выше -> снова слайс 0
+        // Пропускаем фейд-ин (первый сэмпл всегда 0 из-за 3 мс фейда)
+        let mut peak = 0.0f32;
+        for _ in 0..200 {
+            let (l, _) = s.next_sample();
+            peak = peak.max(l.abs());
+        }
+        assert!(peak > 0.5, "слайс должен звучать, peak={peak}");
+    }
 }
