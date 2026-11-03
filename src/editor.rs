@@ -1,9 +1,10 @@
 ﻿// src/editor.rs - GUI плагина (egui, полностью кастомная отрисовка).
 //
-// Стиль: тёмный брутализм / «бетон». Никаких стандартных виджетов egui:
-// ползунки-«планки», светодиодные тумблеры, панели-плиты, штампы секций,
-// штрих-код в шапке, зернистая фактура бетона.
-// Шрифты: Oswald (узкий индустриальный, заголовки) + JetBrains Mono (метки, цифры).
+// Стиль: минимализм — почти чёрный фон, тонкие серые линии, белый текст,
+// один кислотный акцент (лайм). Без текстур и «бруталистских» штампов.
+// Никаких стандартных виджетов egui: ползунки-«планки», квадратные
+// тумблеры, панели-плиты, заголовки секций.
+// Шрифты: Oswald (заголовки) + JetBrains Mono (метки, цифры).
 
 use crate::sample::{self, UiStatus};
 use crate::PostAmbientParams;
@@ -20,18 +21,18 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// ---------------------------------------------------------------- палитра «бетон»
-const BG: Color32 = Color32::from_rgb(15, 15, 15); // фон окна
-const PANEL: Color32 = Color32::from_rgb(24, 24, 25); // панель-плита
-const PANEL_DARK: Color32 = Color32::from_rgb(18, 18, 19); // выключенный тумблер
-const PANEL_HOVER: Color32 = Color32::from_rgb(33, 34, 35); // наведение
-const LINE: Color32 = Color32::from_rgb(52, 56, 59); // линии, дорожки
-const TEXT: Color32 = Color32::from_rgb(201, 206, 211); // основной текст
-const MUTED: Color32 = Color32::from_rgb(120, 128, 136); // приглушённый
-const ACCENT: Color32 = Color32::from_rgb(147, 168, 184); // холодный серо-синий
-const ACCENT_DIM: Color32 = Color32::from_rgb(74, 88, 99); // приглушённый акцент
-const LED_ON: Color32 = Color32::from_rgb(120, 220, 160); // MIDI-нота зажата
-const ERR: Color32 = Color32::from_rgb(196, 106, 96); // ошибка загрузки файла
+// ---------------------------------------------------------------- палитра «минимализм»
+const BG: Color32 = Color32::from_rgb(10, 10, 11); // почти чёрный фон
+const PANEL: Color32 = Color32::from_rgb(16, 16, 18); // панель-плита
+const PANEL_DARK: Color32 = Color32::from_rgb(13, 13, 15); // выключенный тумблер
+const PANEL_HOVER: Color32 = Color32::from_rgb(24, 24, 27); // наведение
+const LINE: Color32 = Color32::from_rgb(38, 38, 43); // тонкие серые линии
+const TEXT: Color32 = Color32::from_rgb(242, 242, 243); // белый текст
+const MUTED: Color32 = Color32::from_rgb(122, 122, 128); // приглушённый
+const ACCENT: Color32 = Color32::from_rgb(200, 255, 0); // кислотный лайм
+const ACCENT_DIM: Color32 = Color32::from_rgb(110, 138, 0); // приглушённый лайм
+const LED_ON: Color32 = Color32::from_rgb(200, 255, 0); // MIDI-нота зажата
+const ERR: Color32 = Color32::from_rgb(255, 92, 92); // ошибка загрузки файла
 
 // ---------------------------------------------------------------- шрифты
 fn disp(size: f32) -> FontId {
@@ -55,68 +56,24 @@ const KINDS: [(&str, crate::dsp::noise::NoiseType); 6] = [
 ];
 
 // ---------------------------------------------------------------- примитивы
-/// Зернистая фактура бетона: детерминированные точки с малой прозрачностью.
-fn concrete(painter: &egui::Painter, rect: Rect) {
-    let mut s = 0x2545F491u32;
-    let mut next = move || {
-        s = s.wrapping_mul(1664525).wrapping_add(1013904223);
-        (s >> 8) as f32 / 16_777_216.0
-    };
-    for _ in 0..140 {
-        let x = rect.left() + next() * rect.width();
-        let y = rect.top() + next() * rect.height();
-        let a = 4.0 + next() * 9.0;
-        painter.rect_filled(
-            Rect::from_center_size(pos2(x, y), vec2(1.6, 1.6)),
-            0.0,
-            Color32::from_white_alpha(a as u8),
-        );
-    }
-}
-
-/// Пунктирная линия (промышленный чертёж).
-fn dashed_line(painter: &egui::Painter, y: f32, x0: f32, x1: f32, color: Color32) {
-    let mut x = x0;
-    while x < x1 {
-        let w = (x1 - x).min(4.0).max(0.0);
-        painter.rect_filled(Rect::from_min_size(pos2(x, y), vec2(w, 1.0)), 0.0, color);
-        x += 7.0;
-    }
-}
-
-/// Полоска-штрихкод в шапке (детерминированный узор).
-fn barcode(painter: &egui::Painter, rect: Rect) {
-    let mut s = 0x9E3779B1u32;
-    let mut x = rect.right() - 76.0;
-    let bottom = rect.bottom() - 5.0;
-    while x < rect.right() - 2.0 {
-        s = s.wrapping_mul(1103515245).wrapping_add(12345);
-        let w = 1.0 + ((s >> 16) % 3) as f32;
-        let h = 10.0 + ((s >> 20) % 9) as f32;
-        painter.rect_filled(
-            Rect::from_min_size(pos2(x, bottom - h), vec2(w, h)),
-            0.0,
-            Color32::from_rgb(58, 62, 66),
-        );
-        x += w + 2.0;
-    }
-}
-
-/// Кнопка-«чип»: квадратная, без скруглений. `active` - инверсная заливка.
+/// Кнопка-«чип»: квадратная, без скруглений. `active` - заливка лаймом.
 fn chip(ui: &mut egui::Ui, label: &str, active: bool, size: Vec2) -> egui::Response {
     let (resp, painter) = ui.allocate_painter(size, Sense::click());
     let rect = resp.rect;
     let hovered = resp.hovered();
-    let bg = if active {
-        ACCENT
-    } else if hovered {
-        PANEL_HOVER
+    // Активный - сплошная заливка лаймом; обычный - прозрачная с тонкой линией
+    if active {
+        painter.rect_filled(rect, 0.0, ACCENT);
     } else {
-        PANEL_DARK
-    };
-    painter.rect_filled(rect, 0.0, bg);
-    if !active {
-        painter.rect_stroke(rect, 0.0, Stroke::new(1.0_f32, LINE), StrokeKind::Inside);
+        if hovered {
+            painter.rect_filled(rect, 0.0, PANEL_HOVER);
+        }
+        painter.rect_stroke(
+            rect,
+            0.0,
+            Stroke::new(1.0_f32, if hovered { MUTED } else { LINE }),
+            StrokeKind::Inside,
+        );
     }
     let tc = if active {
         Color32::from_rgb(16, 16, 16)
@@ -168,9 +125,9 @@ fn slider_row(ui: &mut egui::Ui, setter: &ParamSetter<'_>, param: &impl Param, l
         TEXT,
     );
 
-    // Трек
+    // Трек (тонкая линия)
     let track =
-        Rect::from_min_size(pos2(rect.left(), rect.bottom() - 5.0), vec2(rect.width(), 3.0));
+        Rect::from_min_size(pos2(rect.left(), rect.bottom() - 5.0), vec2(rect.width(), 2.0));
     painter.rect_filled(track, 0.0, LINE);
     painter.rect_filled(
         Rect::from_min_size(track.min, vec2(track.width() * norm, track.height())),
@@ -180,7 +137,7 @@ fn slider_row(ui: &mut egui::Ui, setter: &ParamSetter<'_>, param: &impl Param, l
     // Ручка
     let handle = Rect::from_center_size(
         pos2(rect.left() + rect.width() * norm, track.center().y),
-        vec2(3.0, 13.0),
+        vec2(3.0, 11.0),
     );
     painter.rect_filled(handle, 0.0, if hovered { ACCENT } else { TEXT });
 
@@ -216,18 +173,12 @@ fn toggle_row(
     let on = param.value();
     let hovered = resp.hovered();
 
-    let bg = if on {
-        PANEL_HOVER
-    } else if hovered {
-        Color32::from_rgb(28, 28, 29)
-    } else {
-        PANEL_DARK
-    };
+    let bg = if on || hovered { PANEL_HOVER } else { PANEL_DARK };
     painter.rect_filled(rect, 0.0, bg);
     painter.rect_stroke(
         rect,
         0.0,
-        Stroke::new(1.0_f32, if on { ACCENT_DIM } else { LINE }),
+        Stroke::new(1.0_f32, if on { ACCENT } else { LINE }),
         StrokeKind::Inside,
     );
 
@@ -256,31 +207,27 @@ fn toggle_row(
     }
 }
 
-/// Заголовок секции: штамп-номер + название + растяжка.
+/// Заголовок секции: номер-акцент + название + тонкая линия-растяжка.
 fn section_title(ui: &mut egui::Ui, num: &str, title: &str) {
     ui.horizontal(|ui| {
-        let (stamp, painter) = ui.allocate_painter(vec2(20.0, 14.0), Sense::hover());
-        painter.rect_filled(stamp.rect, 0.0, ACCENT);
-        painter.text(
-            stamp.rect.center(),
-            Align2::CENTER_CENTER,
-            num,
-            monob(9.0),
-            Color32::from_rgb(16, 16, 16),
-        );
+        ui.label(RichText::new(num).font(monob(9.5)).color(ACCENT));
         ui.label(RichText::new(title).font(disp(13.5)).color(TEXT));
+        let (l, p) = ui.allocate_painter(
+            vec2(ui.available_width().max(0.0), 1.0),
+            Sense::hover(),
+        );
+        p.rect_filled(l.rect, 0.0, LINE);
     });
     ui.add_space(2.0);
 }
 
-/// Панель-«плита» с фактурой бетона.
+/// Панель-«плита»: почти чёрная заливка с тонкой серой линией.
 fn panel(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::NONE
         .fill(PANEL)
         .stroke(Stroke::new(1.0_f32, LINE))
         .inner_margin(egui::Margin::symmetric(10, 7))
         .show(ui, |ui| {
-            concrete(ui.painter(), ui.max_rect());
             add(ui);
         });
 }
@@ -359,8 +306,7 @@ pub(crate) fn create(
                     let (head, painter) =
                         ui.allocate_painter(vec2(ui.available_width(), 58.0), Sense::hover());
                     let hr = head.rect;
-                    painter.rect_filled(hr, 0.0, Color32::from_rgb(21, 21, 22));
-                    concrete(&painter, hr);
+                    painter.rect_filled(hr, 0.0, PANEL);
                     painter.text(
                         pos2(hr.left(), hr.top() + 4.0),
                         Align2::LEFT_TOP,
@@ -382,7 +328,6 @@ pub(crate) fn create(
                         monob(11.0),
                         ACCENT,
                     );
-                    barcode(&painter, hr);
 
                     // MIDI-LED: горит пока зажата нота
                     let gate = gate_for_ui.load(Ordering::Relaxed);
@@ -405,9 +350,9 @@ pub(crate) fn create(
                     );
 
                     painter.rect_filled(
-                        Rect::from_min_size(pos2(hr.left(), hr.bottom() - 2.0), vec2(hr.width(), 2.0)),
+                        Rect::from_min_size(pos2(hr.left(), hr.bottom() - 1.0), vec2(hr.width(), 1.0)),
                         0.0,
-                        ACCENT_DIM,
+                        LINE,
                     );
 
                     ui.add_space(6.0);
@@ -425,7 +370,7 @@ pub(crate) fn create(
                                         setter,
                                         &params.noise_on,
                                         "ШУМ",
-                                        Color32::from_rgb(170, 180, 188),
+                                        ACCENT,
                                         w,
                                     );
                                     toggle_row(
@@ -433,7 +378,7 @@ pub(crate) fn create(
                                         setter,
                                         &params.bass_on,
                                         "БАС",
-                                        Color32::from_rgb(130, 158, 186),
+                                        ACCENT,
                                         w,
                                     );
                                     toggle_row(
@@ -441,7 +386,7 @@ pub(crate) fn create(
                                         setter,
                                         &params.pad_on,
                                         "ПАД",
-                                        Color32::from_rgb(186, 172, 148),
+                                        ACCENT,
                                         w,
                                     );
                                     toggle_row(
@@ -449,7 +394,7 @@ pub(crate) fn create(
                                         setter,
                                         &params.sample_on,
                                         "СЭМПЛ",
-                                        Color32::from_rgb(176, 146, 196),
+                                        ACCENT,
                                         w,
                                     );
                                 });
@@ -480,19 +425,8 @@ pub(crate) fn create(
                             // ============ 02 ШУМ ============
                             panel(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    let (stamp, painter) =
-                                        ui.allocate_painter(vec2(20.0, 14.0), Sense::hover());
-                                    painter.rect_filled(stamp.rect, 0.0, ACCENT);
-                                    painter.text(
-                                        stamp.rect.center(),
-                                        Align2::CENTER_CENTER,
-                                        "02",
-                                        monob(9.0),
-                                        Color32::from_rgb(16, 16, 16),
-                                    );
-                                    ui.label(
-                                        RichText::new("ШУМ").font(disp(13.5)).color(TEXT),
-                                    );
+                                    ui.label(RichText::new("02").font(monob(9.5)).color(ACCENT));
+                                    ui.label(RichText::new("ШУМ").font(disp(13.5)).color(TEXT));
                                     ui.with_layout(
                                         Layout::right_to_left(egui::Align::Center),
                                         |ui| {
@@ -745,7 +679,11 @@ pub(crate) fn create(
                                 Sense::hover(),
                             );
                             let fr = foot.rect;
-                            dashed_line(&painter, fr.top(), fr.left(), fr.right() - 200.0, LINE);
+                            painter.rect_filled(
+                                Rect::from_min_size(pos2(fr.left(), fr.top()), vec2(fr.width(), 1.0)),
+                                0.0,
+                                LINE,
+                            );
                             painter.text(
                                 pos2(fr.left(), fr.center().y + 4.0),
                                 Align2::LEFT_CENTER,
