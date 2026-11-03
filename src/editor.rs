@@ -701,6 +701,42 @@ pub(crate) fn create(
                                 });
                                 slider_row(ui, setter, &params.sample_level, "УРОВЕНЬ СЭМПЛА");
                             });
+                            ui.add_space(5.0);
+
+                            // ============ 08 СЦЕНЫ (пресеты) ============
+                            panel(ui, |ui| {
+                                section_title(ui, "08", "СЦЕНЫ");
+                                let set = |setter: &ParamSetter<'_>,
+                                           p: &FloatParam,
+                                           v: f32| {
+                                    setter.begin_set_parameter(p);
+                                    setter.set_parameter(p, v);
+                                    setter.end_set_parameter(p);
+                                };
+                                if chip(ui, "ЮЗ СПб · СУПЕР АТМОСФЕРА", false, vec2(172.0, 20.0))
+                                    .clicked()
+                                {
+                                    // Значения сцены из presets/super_atmospheric_v1_1_1.json
+                                    set(setter, &params.noise_level, 0.8);
+                                    set(setter, &params.granularity, 0.9);
+                                    set(setter, &params.modulation, 0.5);
+                                    set(setter, &params.bass_freq, 45.0);
+                                    set(setter, &params.distortion, 0.6);
+                                    set(setter, &params.tempo, 90.0);
+                                    set(setter, &params.resonance, 0.7);
+                                    set(setter, &params.filter_cutoff, 800.0);
+                                    set(setter, &params.reverb_size, 0.95);
+                                    set(setter, &params.echo_delay, 2.5);
+                                    set(setter, &params.stereo_width, 0.9);
+                                }
+                                ui.label(
+                                    RichText::new(
+                                        "шум 0.8 · зерно 0.9 · бас 45 Гц · эхо 2.5 с · реверб 0.95",
+                                    )
+                                    .font(mono(8.5))
+                                    .color(MUTED),
+                                );
+                            });
 
                             // ============ ПОДВАЛ ============
                             ui.add_space(6.0);

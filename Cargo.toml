@@ -1,6 +1,6 @@
 [package]
 name = "post_ambient_vst"
-version = "3.0.0"
+version = "3.1.0"
 edition = "2021"
 description = "Post-punk ambient soundscape generator for FL Studio (Southwest St. Petersburg)"
 license = "GPL-3.0-only"

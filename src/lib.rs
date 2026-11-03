@@ -256,7 +256,7 @@ impl Default for PostAmbientParams {
             echo_delay: FloatParam::new(
                 "Echo Delay",
                 1.2,
-                FloatRange::Linear { min: 0.5, max: 2.0 },
+                FloatRange::Linear { min: 0.5, max: 3.0 },
             )
             .with_smoother(SmoothingStyle::Linear(100.0))
             .with_step_size(0.01)
@@ -352,8 +352,8 @@ impl Plugin for PostAmbient {
         self.concrete_l = StateVariableFilter::new(sr);
         self.concrete_r = StateVariableFilter::new(sr);
 
-        // Эхо: ёмкость под максимум параметра (2.0 с) + запас
-        self.echo = Echo::new((2.1 * sr) as usize);
+        // Эхо: ёмкость под максимум параметра (3.0 с) + запас
+        self.echo = Echo::new((3.1 * sr) as usize);
         self.haas = vec![0.0; 8192];
         self.haas_idx = 0;
         self.reverb = Reverb::new();
