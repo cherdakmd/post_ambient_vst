@@ -3,10 +3,18 @@ node_modules/
 
 # Rust build artifacts
 /target/
+**/target/
 
-# Результаты рендера
+# Результаты рендера (tools/dsp_standalone, src/render.js)
 output/
 *.wav
+
+# Сборки плагинов
+*.dll
+*.so
+*.dylib
+*.vst3/
+*.clap/
 
 # Системные файлы
 .DS_Store

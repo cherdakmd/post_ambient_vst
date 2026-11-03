@@ -1,0 +1,47 @@
+{
+  "theme": "brutalist_grey_sky",
+  "colors": {
+    "background": "#1a1a1a",
+    "concrete": "#4a4a4a",
+    "grey_sky": "#7a7a7a",
+    "accent_post_punk": "#d32f2f",
+    "text": "#ffffff"
+  },
+  "fonts": {
+    "display": "./fonts/Display.ttf",
+    "mono_bold": "./fonts/Mono-Bold.ttf",
+    "mono_regular": "./fonts/Mono-Regular.ttf"
+  },
+  "layout": {
+    "style": "brutalist_minimalism",
+    "inspiration": "Panel houses and small three-story houses of Southwest St. Petersburg",
+    "elements": [
+      "SW Wind Gate (Innovation 1)",
+      "Brutalist Texture Mapping (Innovation 2)",
+      "Panel Echo Resonance (Innovation 3)",
+      "Post-Punk Sync (Innovation 4)",
+      "Courtyard Stereo Expansion (Innovation 5)",
+      "Granular Noise Storm (Innovation 6)",
+      "Concrete Wall Filter (Innovation 7)",
+      "Wind Dynamics Modulation (Innovation 8)",
+      "Post-Punk Distortion Engine (Innovation 9)",
+      "Atmospheric Reverb Landscape (Innovation 10)",
+      "Grey Sky GUI (Innovation 11)",
+      "FL Studio Preset Bridge (Innovation 12)"
+    ]
+  },
+  "improvements": [
+    "GUI Palette (Improvement 1)",
+    "Bass Optimization (Improvement 2)",
+    "Panel Echo (Improvement 3)",
+    "Granularity (Improvement 4)",
+    "Stereo Effect (Improvement 5)",
+    "Resonance (Improvement 6)",
+    "Distortion (Improvement 7)",
+    "Modulation (Improvement 8)",
+    "Spectral Shift (Improvement 9)",
+    "Reverb (Improvement 10)",
+    "FL Studio Integration (Improvement 11)",
+    "Documentation (Improvement 12)"
+  ]
+}
