@@ -129,9 +129,9 @@ impl PadSynth {
         let mut l = 0.0f32;
         let mut r = 0.0f32;
 
-        // Медленный атак ~450 мс, длинный релиз ~1.6 с («растворение»)
-        let attack_k = 1.0 - (-1.0 / (0.45 * sample_rate)).exp();
-        let release_k = 1.0 - (-1.0 / (1.6 * sample_rate)).exp();
+        // Атак ~450 мс до 95%, релиз ~1.6 с до тишины (-60 дБ)
+        let attack_k = 1.0 - (-1.0 / (0.15 * sample_rate)).exp();
+        let release_k = 1.0 - (-1.0 / (0.23 * sample_rate)).exp();
 
         for v in &mut self.voices {
             match v.stage {
@@ -197,5 +197,64 @@ impl PadSynth {
 
         self.time += 1.0 / sample_rate as f64;
         (out_l, out_r)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pad_is_silent_without_notes() {
+        let mut p = PadSynth::new(44_100.0, 42);
+        let mut peak = 0.0f32;
+        for _ in 0..44_100 {
+            let (l, r) = p.next_sample(44_100.0, 0.2);
+            peak = peak.max(l.abs()).max(r.abs());
+        }
+        assert!(peak < 1e-3, "пад молчит без нот, peak={peak}");
+    }
+
+    #[test]
+    fn pad_plays_chord_and_releases() {
+        let mut p = PadSynth::new(44_100.0, 42);
+        // Аккорд: три зажатые ноты
+        p.note_on(220.0, 45);
+        p.note_on(277.18, 49);
+        p.note_on(329.63, 52);
+        let mut peak = 0.0f32;
+        for _ in 0..88_200 {
+            // 2 с - атак 450 мс успевает отработать
+            let (l, r) = p.next_sample(44_100.0, 0.2);
+            peak = peak.max(l.abs()).max(r.abs());
+        }
+        assert!(peak > 0.02, "пад должен звучать на аккорде, peak={peak}");
+
+        // Отпустили все ноты - релиз ~1.6 с, через 5 с тишина
+        p.note_off(45);
+        p.note_off(49);
+        p.note_off(52);
+        for _ in 0..(44_100 * 5) {
+            p.next_sample(44_100.0, 0.2);
+        }
+        let (l, r) = p.next_sample(44_100.0, 0.2);
+        let tail = l.abs().max(r.abs());
+        assert!(tail < 1e-3, "после релиза пад должен замолчать, tail={tail}");
+    }
+
+    #[test]
+    fn pad_handles_more_notes_than_voices() {
+        let mut p = PadSynth::new(44_100.0, 42);
+        // 12 нот при 8 голосах - голосовой воровство не должно ломать звук
+        for i in 0..12u8 {
+            p.note_on(110.0 * (i as f32 + 1.0).powf(1.0 / 1.7), 36 + i);
+        }
+        let mut peak = 0.0f32;
+        for _ in 0..22_050 {
+            let (l, r) = p.next_sample(44_100.0, 0.3);
+            peak = peak.max(l.abs()).max(r.abs());
+            assert!(peak.is_finite(), "NaN/Inf в выходе пада");
+        }
+        assert!(peak > 0.02, "звук должен присутствовать, peak={peak}");
     }
 }

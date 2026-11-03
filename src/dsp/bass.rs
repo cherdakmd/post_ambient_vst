@@ -151,3 +151,71 @@ impl BassSynth {
         s
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bass_is_silent_without_note() {
+        let mut b = BassSynth::new(44_100.0);
+        let mut peak = 0.0f32;
+        for _ in 0..44_100 {
+            peak = peak.max(b.next_sample(44_100.0, 0.0, 0.4, 0.3, 0.5).abs());
+        }
+        assert!(peak < 1e-3, "бас молчит без ноты, peak={peak}");
+    }
+
+    #[test]
+    fn bass_plays_note_on_gate() {
+        let mut b = BassSynth::new(44_100.0);
+        b.set_note(55.0); // A1
+        b.set_gate(true);
+        let mut peak = 0.0f32;
+        for _ in 0..22_050 {
+            peak = peak.max(b.next_sample(44_100.0, 0.0, 0.4, 0.3, 0.5).abs());
+        }
+        assert!(peak > 0.05, "бас должен звучать после NoteOn, peak={peak}");
+
+        // Отпустили ноту - через релиз затихает
+        b.set_gate(false);
+        for _ in 0..44_100 {
+            b.next_sample(44_100.0, 0.0, 0.4, 0.3, 0.5);
+        }
+        let tail = b.next_sample(44_100.0, 0.0, 0.4, 0.3, 0.5).abs();
+        assert!(tail < 1e-3, "после релиза бас должен замолчать, tail={tail}");
+    }
+
+    #[test]
+    fn bass_pitch_follows_note() {
+        // Выше нота - выше частота основного тона (проверка через нулевые
+        // пересечения сглаженного сигнала)
+        fn estimate(freq: f32) -> f32 {
+            let mut b = BassSynth::new(44_100.0);
+            b.set_note(freq);
+            b.set_gate(true);
+            // Прогрев фильтра и огибающей
+            for _ in 0..8820 {
+                b.next_sample(44_100.0, 0.0, 0.4, 0.0, 0.0);
+            }
+            let mut prev = 0.0f32;
+            let mut crossings = 0u32;
+            let n = 22_050u32;
+            for i in 0..n {
+                let s = b.next_sample(44_100.0, 0.0, 0.4, 0.0, 0.0);
+                if prev < 0.0 && s >= 0.0 {
+                    crossings += 1;
+                }
+                prev = s;
+                let _ = i;
+            }
+            crossings as f32 / (n as f32 / 44_100.0)
+        }
+        let low = estimate(55.0);
+        let high = estimate(110.0);
+        assert!(
+            high > low * 1.6,
+            "удвоение ноты должно почти удвоить частоту: {low} -> {high}"
+        );
+    }
+}
