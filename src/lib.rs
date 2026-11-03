@@ -16,11 +16,11 @@ use std::sync::Arc;
 mod dsp;
 mod editor;
 mod sample;
-use dsp::bass::BassState;
+use dsp::bass::BassSynth;
 use dsp::echo::Echo;
 use dsp::filters::StateVariableFilter;
 use dsp::noise::{NoiseState, NoiseType};
-use dsp::pad::PadState;
+use dsp::pad::PadSynth;
 use dsp::reverb::Reverb;
 use nih_plug_egui::EguiState;
 use sample::{SamplerVoice, SampleShared};
@@ -66,14 +66,19 @@ impl NoteStack {
     }
 }
 
+/// Частота MIDI-ноты в Гц (нота 69 = A4 = 440 Гц).
+fn note_to_hz(note: u8) -> f32 {
+    440.0 * 2.0f32.powf((note as f32 - 69.0) / 12.0)
+}
+
 pub struct PostAmbient {
     params: Arc<PostAmbientParams>,
     sample_rate: f32,
 
     // Состояние DSP
     noise: NoiseState,
-    bass: BassState,
-    pad: PadState,
+    bass: BassSynth,
+    pad: PadSynth,
     concrete_l: StateVariableFilter,
     concrete_r: StateVariableFilter,
     haas: Vec<f32>,
@@ -86,7 +91,6 @@ pub struct PostAmbient {
 
     // --- MIDI-гейт: звук только пока зажаты ноты ---
     held: NoteStack,
-    current_note: u8,
     gate_env: f32,
     gate_target: f32,
     /// Уровень гейта для MIDI-LED в GUI (безопасно для audio-потока).
@@ -123,9 +127,9 @@ pub struct PostAmbientParams {
     #[id = "seed"]
     pub seed: IntParam,
 
-    // --- Бас ---
-    #[id = "bass_freq"]
-    pub bass_freq: FloatParam,
+    // --- Бас (транспонирование относительно зажатой ноты) ---
+    #[id = "bass_tune"]
+    pub bass_tune: IntParam,
     #[id = "bass_boost"]
     pub bass_boost: FloatParam,
     #[id = "glide"]
@@ -174,8 +178,8 @@ impl Default for PostAmbient {
             params: Arc::new(PostAmbientParams::default()),
             sample_rate: 1.0,
             noise: NoiseState::new(1.0, 42),
-            bass: BassState::new(1.0, 60.0),
-            pad: PadState::new(1.0, 42),
+            bass: BassSynth::new(1.0),
+            pad: PadSynth::new(1.0, 42),
             concrete_l: StateVariableFilter::new(1.0),
             concrete_r: StateVariableFilter::new(1.0),
             haas: vec![0.0; 8192],
@@ -186,7 +190,6 @@ impl Default for PostAmbient {
             last_seed: 42,
 
             held: NoteStack::new(),
-            current_note: 60,
             gate_env: 0.0,
             gate_target: 0.0,
             gate_level: Arc::new(AtomicF32::new(0.0)),
@@ -223,19 +226,12 @@ impl Default for PostAmbientParams {
                 IntRange::Linear { min: 0, max: 999_999 },
             ),
 
-            bass_freq: FloatParam::new(
-                "Bass Freq",
-                60.0,
-                FloatRange::Skewed {
-                    min: 30.0,
-                    max: 120.0,
-                    factor: FloatRange::skew_factor(-2.0),
-                },
+            bass_tune: IntParam::new(
+                "Bass Tune (semitones)",
+                -12,
+                IntRange::Linear { min: -12, max: 12 },
             )
-            .with_smoother(SmoothingStyle::Logarithmic(30.0))
-            .with_step_size(0.1)
-            .with_unit(" Hz")
-            .with_value_to_string(formatters::v2s_f32_rounded(1)),
+            .with_unit(" st"),
             bass_boost: p01("Bass Boost", 0.5),
             glide: p01("Glide (slide)", 0.35),
             distortion: p01("Distortion", 0.3),
@@ -256,7 +252,7 @@ impl Default for PostAmbientParams {
             echo_delay: FloatParam::new(
                 "Echo Delay",
                 1.2,
-                FloatRange::Linear { min: 0.5, max: 3.0 },
+                FloatRange::Linear { min: 0.1, max: 3.0 },
             )
             .with_smoother(SmoothingStyle::Linear(100.0))
             .with_step_size(0.01)
@@ -344,11 +340,10 @@ impl Plugin for PostAmbient {
         self.sample_rate = buffer_config.sample_rate;
         let sr = self.sample_rate;
         let seed = self.params.seed.value() as u32;
-        let root = self.params.bass_freq.value();
 
         self.noise = NoiseState::new(sr, seed);
-        self.bass = BassState::new(sr, root);
-        self.pad = PadState::new(sr, seed);
+        self.bass = BassSynth::new(sr);
+        self.pad = PadSynth::new(sr, seed);
         self.concrete_l = StateVariableFilter::new(sr);
         self.concrete_r = StateVariableFilter::new(sr);
 
@@ -366,9 +361,9 @@ impl Plugin for PostAmbient {
 
     fn reset(&mut self) {
         let seed = self.params.seed.value() as u32;
-        let root = self.params.bass_freq.value();
         self.noise.reseed(self.sample_rate, seed);
-        self.bass.reset(root);
+        self.bass.reset();
+        self.pad.reset();
         self.concrete_l.reset();
         self.concrete_r.reset();
         self.echo.reset();
@@ -377,7 +372,6 @@ impl Plugin for PostAmbient {
         self.haas_idx = 0;
         self.fx_time = 0.0;
         self.held.clear();
-        self.current_note = 60;
         self.gate_env = 0.0;
         self.gate_target = 0.0;
     }
@@ -399,6 +393,7 @@ impl Plugin for PostAmbient {
         let sample_loop = self.params.sample_loop.value();
         let sample_level = self.params.sample_level.value();
         let note_gate = self.params.note_gate.value();
+        let tempo_sync = self.params.tempo_sync.value();
         let kind = self.params.noise_type.value();
 
         // --- Подхватываем новый сэмпл (try_lock - без блокировки audio-потока) ---
@@ -407,28 +402,43 @@ impl Plugin for PostAmbient {
             self.sampler.set_sample(new);
         }
 
-        // --- MIDI: монофонический гейт «последняя нота сверху» ---
+        // Транспонирование баса относительно зажатой ноты (полутона)
+        let tune_factor = 2.0f32.powf(self.params.bass_tune.value() as f32 / 12.0);
+
+        // --- MIDI: ноты управляют басом и падом ---
         while let Some(event) = context.next_event() {
             match event {
                 NoteEvent::NoteOn { note, .. } => {
                     self.held.push(note);
-                    self.current_note = note;
                     self.gate_target = 1.0;
+                    let hz = note_to_hz(note);
+                    self.bass.set_note(hz * tune_factor);
+                    self.bass.set_gate(true);
+                    self.pad.note_on(hz, note);
                     if sample_on {
                         self.sampler.retrigger(note, sr);
                     }
                 }
                 NoteEvent::NoteOff { note, .. } => {
                     self.held.remove(note);
+                    self.pad.note_off(note);
                     match self.held.last() {
-                        // Остались другие зажатые ноты - гейт не закрывается
-                        Some(n) => self.current_note = n,
-                        None => self.gate_target = 0.0,
+                        // Остались другие зажатые ноты - гейт не закрывается,
+                        // бас перепрыгивает на нижнюю зажатую ноту
+                        Some(n) => {
+                            self.bass.set_note(note_to_hz(n) * tune_factor);
+                        }
+                        None => {
+                            self.gate_target = 0.0;
+                            self.bass.set_gate(false);
+                        }
                     }
                 }
                 NoteEvent::Choke { .. } => {
                     self.held.clear();
                     self.gate_target = 0.0;
+                    self.bass.set_gate(false);
+                    self.pad.all_off();
                 }
                 _ => (),
             }
@@ -438,9 +448,6 @@ impl Plugin for PostAmbient {
         let gate_on_coef = 1.0 - (-1.0 / (0.008 * sr)).exp();
         let gate_off_coef = 1.0 - (-1.0 / (0.12 * sr)).exp();
 
-        // Транспонирование баса и пада по зажатой ноте (нота 60 = исходный лад)
-        let note_factor = 2.0f32.powf((self.current_note as f32 - 60.0) / 12.0);
-
         // Рандомайзер: новый seed = новый паттерн шума
         let seed = self.params.seed.value();
         if seed != self.last_seed {
@@ -448,8 +455,8 @@ impl Plugin for PostAmbient {
             self.last_seed = seed;
         }
 
-        // Темп: от хоста (BPM из FL) или ручной
-        let bpm = if self.params.tempo_sync.value() {
+        // Темп: от хоста (BPM из FL) или ручной — для синхронизации эхо
+        let bpm = if tempo_sync {
             context
                 .transport()
                 .tempo
@@ -459,13 +466,14 @@ impl Plugin for PostAmbient {
         } else {
             self.params.tempo.value()
         };
+        // Эхо-синк: восьмая нота от BPM (когда «СИНХР ЭХО» включён)
+        let echo_sync_time = (30.0 / bpm).clamp(0.1, 3.0);
 
         for channel_samples in buffer.iter_samples() {
             // Сглаживание параметров (обязательно вызывать каждый сэмпл)
             let noise_level = self.params.noise_level.smoothed.next();
             let granularity = self.params.granularity.smoothed.next();
             let modulation = self.params.modulation.smoothed.next();
-            let bass_freq = self.params.bass_freq.smoothed.next();
             let bass_boost = self.params.bass_boost.smoothed.next();
             let glide = self.params.glide.smoothed.next();
             let distortion = self.params.distortion.smoothed.next();
@@ -495,21 +503,13 @@ impl Plugin for PostAmbient {
             }
 
             if bass_on {
-                let b = self.bass.next_sample(
-                    sr,
-                    bass_freq * note_factor,
-                    bpm,
-                    resonance,
-                    distortion,
-                    glide,
-                    bass_boost,
-                );
+                let b = self.bass.next_sample(sr, glide, resonance, distortion, bass_boost);
                 l += b * 0.8;
                 r += b * 0.8;
             }
 
             if pad_on {
-                let (pl, pr) = self.pad.next_sample(sr, bass_freq * note_factor, bpm, modulation);
+                let (pl, pr) = self.pad.next_sample(sr, modulation);
                 l += pl * 1.1;
                 r += pr * 1.1;
             }
@@ -556,8 +556,9 @@ impl Plugin for PostAmbient {
                 r = r * (1.0 - mix) + mixed * mix;
             }
 
-            // --- Эхо «панельные дома» (ping-pong) ---
-            let delay_samples = (echo_delay * sr) as usize;
+            // --- Эхо «панельные дома» (ping-pong, синхронизируемое с темпом) ---
+            let echo_time = if tempo_sync { echo_sync_time } else { echo_delay };
+            let delay_samples = (echo_time * sr) as usize;
             let (el, er) = self.echo.process_sample(
                 l,
                 r,

@@ -137,6 +137,13 @@ fn chip(ui: &mut egui::Ui, label: &str, active: bool, size: Vec2) -> egui::Respo
 
 /// Ползунок-«планка»: подпись слева, значение справа, рисунок-трек снизу.
 /// Перетаскивание - по всей строке, двойной клик - сброс к умолчанию.
+/// Установка параметра из пресет-сцены (в единицах самого параметра).
+fn set_param<P: Param>(setter: &ParamSetter<'_>, param: &P, value: P::Plain) {
+    setter.begin_set_parameter(param);
+    setter.set_parameter(param, value);
+    setter.end_set_parameter(param);
+}
+
 fn slider_row(ui: &mut egui::Ui, setter: &ParamSetter<'_>, param: &impl Param, label: &str) {
     let width = ui.available_width();
     let (resp, painter) = ui.allocate_painter(vec2(width, 27.0), Sense::click_and_drag());
@@ -554,7 +561,7 @@ pub(crate) fn create(
                             panel(ui, |ui| {
                                 section_title(ui, "03", "БАС");
                                 ui.columns(2, |cols| {
-                                    slider_row(&mut cols[0], setter, &params.bass_freq, "ЧАСТОТА");
+                                    slider_row(&mut cols[0], setter, &params.bass_tune, "ТЕЙН (ПОЛУТОНА)");
                                     slider_row(&mut cols[1], setter, &params.bass_boost, "БУСТ");
                                 });
                                 ui.columns(2, |cols| {
@@ -586,17 +593,17 @@ pub(crate) fn create(
 
                             // ============ 05 ТЕМП ============
                             panel(ui, |ui| {
-                                section_title(ui, "05", "ТЕМП");
+                                section_title(ui, "05", "ТЕМП И ЭХО");
                                 ui.horizontal(|ui| {
                                     if chip(
                                         ui,
                                         if params.tempo_sync.value() {
-                                            "СИНК: ВКЛ"
+                                            "ЭХО-СИНК: ВКЛ"
                                         } else {
-                                            "СИНК: ВЫКЛ"
+                                            "ЭХО-СИНК: ВЫКЛ"
                                         },
                                         params.tempo_sync.value(),
-                                        vec2(86.0, 20.0),
+                                        vec2(112.0, 20.0),
                                     )
                                     .clicked()
                                     {
@@ -606,7 +613,7 @@ pub(crate) fn create(
                                         setter.end_set_parameter(&params.tempo_sync);
                                     }
                                     ui.label(
-                                        RichText::new("BPM из хоста (FL)")
+                                        RichText::new("восьмая нота от BPM (FL)")
                                             .font(mono(9.0))
                                             .color(MUTED),
                                     );
@@ -706,32 +713,25 @@ pub(crate) fn create(
                             // ============ 08 СЦЕНЫ (пресеты) ============
                             panel(ui, |ui| {
                                 section_title(ui, "08", "СЦЕНЫ");
-                                let set = |setter: &ParamSetter<'_>,
-                                           p: &FloatParam,
-                                           v: f32| {
-                                    setter.begin_set_parameter(p);
-                                    setter.set_parameter(p, v);
-                                    setter.end_set_parameter(p);
-                                };
                                 if chip(ui, "ЮЗ СПб · СУПЕР АТМОСФЕРА", false, vec2(172.0, 20.0))
                                     .clicked()
                                 {
                                     // Значения сцены из presets/super_atmospheric_v1_1_1.json
-                                    set(setter, &params.noise_level, 0.8);
-                                    set(setter, &params.granularity, 0.9);
-                                    set(setter, &params.modulation, 0.5);
-                                    set(setter, &params.bass_freq, 45.0);
-                                    set(setter, &params.distortion, 0.6);
-                                    set(setter, &params.tempo, 90.0);
-                                    set(setter, &params.resonance, 0.7);
-                                    set(setter, &params.filter_cutoff, 800.0);
-                                    set(setter, &params.reverb_size, 0.95);
-                                    set(setter, &params.echo_delay, 2.5);
-                                    set(setter, &params.stereo_width, 0.9);
+                                    set_param(setter, &params.noise_level, 0.8);
+                                    set_param(setter, &params.granularity, 0.9);
+                                    set_param(setter, &params.modulation, 0.5);
+                                    set_param(setter, &params.bass_tune, -12);
+                                    set_param(setter, &params.distortion, 0.6);
+                                    set_param(setter, &params.tempo, 90.0);
+                                    set_param(setter, &params.resonance, 0.7);
+                                    set_param(setter, &params.filter_cutoff, 800.0);
+                                    set_param(setter, &params.reverb_size, 0.95);
+                                    set_param(setter, &params.echo_delay, 2.5);
+                                    set_param(setter, &params.stereo_width, 0.9);
                                 }
                                 ui.label(
                                     RichText::new(
-                                        "шум 0.8 · зерно 0.9 · бас 45 Гц · эхо 2.5 с · реверб 0.95",
+                                        "шум 0.8 · зерно 0.9 · бас −12 полутонов · эхо 2.5 с",
                                     )
                                     .font(mono(8.5))
                                     .color(MUTED),
