@@ -6,7 +6,7 @@
 // тумблеры, панели-плиты, заголовки секций.
 // Шрифты: Oswald (заголовки) + JetBrains Mono (метки, цифры).
 
-use crate::dsp::breaks::{BreakMode, STEPS};
+use crate::dsp::breaks::{BreakMode, Pattern, STEPS};
 use crate::sample::{self, UiStatus};
 use crate::PostAmbientParams;
 use nih_plug::prelude::*;
@@ -20,6 +20,7 @@ use nih_plug_egui::{
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 // ---------------------------------------------------------------- палитра «минимализм»
 const BG: Color32 = Color32::from_rgb(10, 10, 11); // почти чёрный фон
@@ -222,39 +223,160 @@ fn panel(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
         });
 }
 
-/// Лента из 32 шагов брейка: текущий шаг горит лаймом,
-/// яркость остальных зависит от уровня брейка.
-fn step_strip(ui: &mut egui::Ui, break_step: &AtomicU32, level: f32, active: bool) {
-    let (resp, painter) = ui.allocate_painter(vec2(ui.available_width(), 17.0), Sense::hover());
-    let rect = resp.rect;
-    let cur = break_step.load(Ordering::Relaxed) as usize;
-    let gap = 2.0;
-    let bw = (rect.width() - gap * (STEPS as f32 - 1.0)) / STEPS as f32;
+/// Запись паттерна (вызывается из GUI по кнопке/клику).
+fn write_pattern(params: &PostAmbientParams, f: impl FnOnce(&mut Pattern)) {
+    let mut g = params.pattern.write().unwrap_or_else(|e| e.into_inner());
+    f(&mut g);
+}
 
-    for i in 0..STEPS {
-        let x = rect.left() + i as f32 * (bw + gap);
-        let bar = Rect::from_min_size(pos2(x, rect.top()), vec2(bw.max(1.0), rect.height()));
-        if active && i == cur {
-            painter.rect_filled(bar.expand(2.0), 0.0, ACCENT.linear_multiply(0.18));
-            painter.rect_filled(bar, 0.0, ACCENT);
-        } else {
-            let k = if active { 0.35 + level * 0.65 } else { 0.25 };
-            painter.rect_filled(bar, 0.0, ACCENT_DIM.linear_multiply(k));
+/// Сетка паттерна 3×32 (кит/снейр/хэт): ЛКМ - уровень вверх, ПКМ - назад.
+/// Высота столбика = уровень (0..3), колонка текущего шага подсвечена.
+fn pattern_grid(
+    ui: &mut egui::Ui,
+    params: &PostAmbientParams,
+    play_step: usize,
+    playing: bool,
+) {
+    const ROWS: [&str; 3] = ["КИТ", "СНЕЙР", "ХЭТ"];
+    const HILITE: Color32 = Color32::from_rgb(34, 42, 14); // колонка playhead
+
+    let label_w = 44.0;
+    let row_h = 15.0;
+    let cell_h = 12.0;
+    let gap = 1.5;
+    let top_pad = 5.0;
+    let bottom = 15.0;
+    let width = ui.available_width();
+    let height = top_pad + row_h * ROWS.len() as f32 + bottom;
+    let (resp, painter) = ui.allocate_painter(vec2(width, height), Sense::click());
+    let rect = resp.rect;
+
+    let cells_left = rect.left() + label_w;
+    let cells_w = (rect.width() - label_w).max(40.0);
+    let cw = ((cells_w - gap * (STEPS as f32 - 1.0)) / STEPS as f32).max(2.0);
+    let rows_top = rect.top() + top_pad;
+
+    // --- Чтение паттерна (один раз на кадр) ---
+    let mut pat = params
+        .pattern
+        .read()
+        .map(|p| *p)
+        .unwrap_or_else(|e| *e.into_inner());
+    let mut changed = false;
+
+    // --- Попадание указателя в ячейку ---
+    let hit = resp.interact_pointer_pos().and_then(|p| {
+        if p.y < rows_top || p.x < cells_left {
+            return None;
+        }
+        let row = ((p.y - rows_top) / row_h) as usize;
+        if row >= ROWS.len() {
+            return None;
+        }
+        let step = ((p.x - cells_left) / (cw + gap)) as usize;
+        if step >= STEPS {
+            return None;
+        }
+        let cx = cells_left + step as f32 * (cw + gap);
+        let cy = rows_top + row as f32 * row_h;
+        if p.x > cx + cw || p.y > cy + cell_h {
+            return None; // клик в зазоре между ячейками
+        }
+        Some((row, step))
+    });
+
+    if let Some((row, step)) = hit {
+        if resp.clicked() || resp.secondary_clicked() {
+            let lane = pat.lane_mut(row);
+            lane[step] = if resp.clicked() {
+                (lane[step] + 1) % 4
+            } else {
+                (lane[step] + 3) % 4
+            };
+            changed = true;
+        }
+    }
+    if changed {
+        write_pattern(&params, |p| *p = pat);
+    }
+
+    // --- Отрисовка ---
+    // Маркер текущего шага сверху
+    if playing {
+        let mx = cells_left + play_step as f32 * (cw + gap);
+        painter.rect_filled(
+            Rect::from_min_size(pos2(mx, rect.top()), vec2(cw, 2.0)),
+            0.0,
+            ACCENT,
+        );
+    }
+
+    for row in 0..ROWS.len() {
+        let y = rows_top + row as f32 * row_h;
+        painter.text(
+            pos2(rect.left(), y + cell_h * 0.5),
+            Align2::LEFT_CENTER,
+            ROWS[row],
+            mono(8.5),
+            MUTED,
+        );
+        let lane = pat.lane(row);
+        for i in 0..STEPS {
+            let x = cells_left + i as f32 * (cw + gap);
+            let cell = Rect::from_min_size(pos2(x, y), vec2(cw, cell_h));
+            let on_head = playing && i == play_step;
+            let lvl = lane[i];
+            if lvl == 0 {
+                painter.rect_filled(cell, 0.0, if on_head { HILITE } else { PANEL_DARK });
+            } else {
+                let h = cell_h * (lvl as f32 / 3.0);
+                // подложка ячейки (видна колонка playhead)
+                painter.rect_filled(
+                    Rect::from_min_size(pos2(x, y), vec2(cw, cell_h - h)),
+                    0.0,
+                    if on_head { HILITE } else { PANEL_DARK },
+                );
+                let bar = Rect::from_min_size(pos2(x, y + cell_h - h), vec2(cw, h));
+                painter.rect_filled(
+                    bar,
+                    0.0,
+                    if lvl == 3 { ACCENT } else { ACCENT_DIM },
+                );
+            }
+            // Разметка тактов: тонкая линия перед 9, 17, 25 шагом
+            if i % 8 == 0 && i > 0 {
+                painter.rect_filled(
+                    Rect::from_min_size(pos2(x - gap * 0.5, y), vec2(1.0, cell_h)),
+                    0.0,
+                    LINE,
+                );
+            }
         }
     }
 
-    // Счётчик шага под лентой
+    // Подписи снизу
     painter.text(
-        pos2(rect.right(), rect.bottom() + 2.0),
-        Align2::RIGHT_TOP,
-        if active {
-            format!("{:02}/{STEPS}", cur + 1)
-        } else {
-            "ВЫКЛ".to_string()
-        },
-        mono(8.5),
-        if active { ACCENT } else { MUTED },
+        pos2(rect.left(), rect.bottom()),
+        Align2::LEFT_BOTTOM,
+        "ЛКМ — уровень · ПКМ — назад",
+        mono(8.0),
+        MUTED,
     );
+    painter.text(
+        pos2(rect.right(), rect.bottom()),
+        Align2::RIGHT_BOTTOM,
+        if playing {
+            format!("ШАГ {:02}/{STEPS}", play_step + 1)
+        } else {
+            "ШАГ --/32".to_string()
+        },
+        monob(8.5),
+        if playing { ACCENT } else { MUTED },
+    );
+
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+    }
 }
 
 // ---------------------------------------------------------------- окно
@@ -466,15 +588,40 @@ pub(crate) fn create(
                                 });
                                 ui.add_space(3.0);
 
-                                // Лента шагов
-                                let level = params.break_level.value();
-                                step_strip(
-                                    ui,
-                                    &step_for_ui,
-                                    level,
-                                    params.break_on.value() && !is_file,
-                                );
-                                ui.add_space(6.0);
+                                if !is_file {
+                                    // Кнопки редактора паттерна
+                                    ui.horizontal(|ui| {
+                                        if chip(ui, "АМЕН", false, vec2(52.0, 18.0)).clicked() {
+                                            write_pattern(&params, |p| *p = Pattern::amen());
+                                        }
+                                        if chip(ui, "СЛУЧАЙНО", false, vec2(76.0, 18.0)).clicked()
+                                        {
+                                            let nanos = SystemTime::now()
+                                                .duration_since(UNIX_EPOCH)
+                                                .map(|d| d.as_nanos() as u32)
+                                                .unwrap_or(7);
+                                            write_pattern(&params, |p| {
+                                                *p = Pattern::random(nanos)
+                                            });
+                                        }
+                                        if chip(ui, "ПОВТОР 2-й", false, vec2(76.0, 18.0))
+                                            .clicked()
+                                        {
+                                            write_pattern(&params, |p| p.repeat_first_bar());
+                                        }
+                                        if chip(ui, "ОЧИСТИТЬ", false, vec2(76.0, 18.0)).clicked()
+                                        {
+                                            write_pattern(&params, |p| *p = Pattern::empty());
+                                        }
+                                    });
+                                    ui.add_space(4.0);
+
+                                    // Сетка-редактор 3×32
+                                    let play = params.break_on.value();
+                                    let cur = step_for_ui.load(Ordering::Relaxed) as usize;
+                                    pattern_grid(ui, &params, cur.min(STEPS - 1), play);
+                                    ui.add_space(6.0);
+                                }
 
                                 ui.columns(2, |cols| {
                                     slider_row(&mut cols[0], setter, &params.break_level, "УРОВЕНЬ");
@@ -543,12 +690,6 @@ pub(crate) fn create(
                                     }
                                     ui.label(
                                         RichText::new("ноты C2.. = 16 слайсов · октавы повторяют")
-                                            .font(mono(8.5))
-                                            .color(MUTED),
-                                    );
-                                } else {
-                                    ui.label(
-                                        RichText::new("играет по BPM сам, ноты не нужны")
                                             .font(mono(8.5))
                                             .color(MUTED),
                                     );
@@ -646,6 +787,7 @@ pub(crate) fn create(
                                     set_param(setter, &params.modulation, 0.2);
                                     set_param(setter, &params.reverb_size, 0.7);
                                     set_param(setter, &params.stereo_width, 0.6);
+                                    write_pattern(&params, |p| *p = Pattern::amen());
                                 }
 
                                 // АМЕН 160: жёстче и злее, больше свинга
@@ -667,6 +809,7 @@ pub(crate) fn create(
                                     set_param(setter, &params.modulation, 0.15);
                                     set_param(setter, &params.reverb_size, 0.55);
                                     set_param(setter, &params.stereo_width, 0.5);
+                                    write_pattern(&params, |p| *p = Pattern::amen());
                                 }
 
                                 // ЭМБИЕНТ НОЧЬ: медленно, глубоко, без брейка

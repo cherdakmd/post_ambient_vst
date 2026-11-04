@@ -19,13 +19,14 @@ mod dsp;
 mod editor;
 mod sample;
 use dsp::bass::SubBass;
-use dsp::breaks::{BreakMode, BreakPattern};
+use dsp::breaks::{BreakMode, BreakPattern, Pattern};
 use dsp::echo::Echo;
 use dsp::filters::StateVariableFilter;
 use dsp::pad::PadSynth;
 use dsp::reverb::Reverb;
 use nih_plug_egui::EguiState;
 use sample::{SampleShared, Slicer};
+use std::sync::RwLock;
 
 /// Стек зажатых нот (монофонный «последняя нота сверху», без аллокаций).
 struct NoteStack {
@@ -127,6 +128,9 @@ pub struct PostAmbientParams {
     pub break_level: FloatParam,
     #[id = "swing"]
     pub swing: FloatParam,
+    /// Ритм брейка: редактируется в GUI, сохраняется в пресете.
+    #[persist = "pattern"]
+    pub pattern: Arc<RwLock<Pattern>>,
 
     // --- Суб-бас ---
     #[id = "bass_tune"]
@@ -205,7 +209,7 @@ fn p01(name: &'static str, default: f32) -> FloatParam {
 impl Default for PostAmbientParams {
     fn default() -> Self {
         Self {
-            editor_state: EguiState::from_size(470, 720),
+            editor_state: EguiState::from_size(470, 800),
 
             break_on: BoolParam::new("Break", true),
             bass_on: BoolParam::new("Sub Bass", true),
@@ -214,6 +218,7 @@ impl Default for PostAmbientParams {
             break_mode: EnumParam::new("Break Mode", BreakMode::BuiltIn),
             break_level: p01("Break Level", 0.8),
             swing: p01("Swing", 0.15),
+            pattern: Arc::new(RwLock::new(Pattern::amen())),
 
             bass_tune: IntParam::new(
                 "Bass Tune (semitones)",
@@ -386,6 +391,11 @@ impl Plugin for PostAmbient {
         if let Ok(guard) = self.sample_shared.loaded.try_lock() {
             let new = guard.as_ref().map(|a| a.clone());
             self.slicer.set_sample(new, sr);
+        }
+
+        // --- Подхватываем паттерн из GUI (try_read - без блокировки) ---
+        if let Ok(pat) = self.params.pattern.try_read() {
+            self.brk.set_pattern(&pat);
         }
 
         // --- MIDI: ноты управляют басом, падом и слайсами своего файла ---
